@@ -5,6 +5,7 @@
     "description": "P1 EAN packaging API: expected codes, atomic PACK work orders, scan guards and PL labels. Requires core P1 scan write-path.",
     "author": "production-automation",
     "provider": "Modules\\PlPackagingExtras\\Providers\\PlPackagingExtrasServiceProvider",
+    "license": "AGPL-3.0-only",
     "requires_core": ">=0.27.0",
     "hooks": [],
     "requires": []

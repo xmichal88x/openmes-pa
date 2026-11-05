@@ -1,6 +1,15 @@
 .git
 .github
 *.md
+# Keep the licensing/notice set in the build context — the image must ship them
+# (AGPL §4/§13) even though the rest of the repo's Markdown is not needed.
+!LICENSE
+!LICENSING.md
+!NOTICE
+!TRADEMARK.md
+# Local, untracked module checkouts live at the root; backend/modules (the ones
+# that belong in the image) arrive through `COPY backend/ .`.
+modules/
 backend/node_modules
 backend/vendor
 backend/.env

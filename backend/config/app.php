@@ -56,6 +56,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Corresponding Source URL (AGPL-3.0 §13)
+    |--------------------------------------------------------------------------
+    |
+    | Shown in the UI so every user of this network service can reach the
+    | corresponding source. Point it at the exact commit that was built
+    | (e.g. .../openmes-pa/tree/<sha>) rather than a moving branch.
+    |
+    */
+
+    'source_url' => env(
+        'APP_SOURCE_URL',
+        'https://github.com/xmichal88x/openmes-pa/tree/pa/0.28',
+    ),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |

@@ -1,0 +1,40 @@
+NOTICE — modified OpenMES distribution
+======================================
+
+This repository and the container images built from it are a MODIFIED version
+of OpenMES ("OpenMES PA"), maintained for production automation at edeseczka.
+
+Upstream
+--------
+OpenMES v0.28.0, upstream commit eb184a2984b74d685e65ee24df9b8c7b34c765f6
+(https://github.com/Mes-Open/OpenMes).
+
+Modifications
+-------------
+- PA change set R05–R22 applied to the backend (see PA-BASELINE.md for the
+  mapping of each change to files).
+- PA modules PipelineDashboard and PlPackagingExtras under backend/modules/.
+- Image/deployment and licensing hardening (digest-pinned images, AGPL notice
+  and source offer).
+
+Licensing
+---------
+- OpenMES core, all modifications to it, and the PA modules in
+  backend/modules/ (including PipelineDashboard and PlPackagingExtras) are
+  licensed under AGPL-3.0-only. See LICENSE and LICENSING.md.
+- Upstream's modules/ layer keeps its upstream licensing (AFL-3.0 where the
+  file carries that notice). No PA module is AFL-licensed.
+- This distribution is offered WITHOUT ANY WARRANTY, to the extent permitted
+  by applicable law.
+
+Corresponding source (AGPL §13)
+-------------------------------
+The complete corresponding source for this running version is available at:
+
+    https://github.com/xmichal88x/openmes-pa
+
+The UI also links to the exact source tree for the deployed commit.
+
+Contact
+-------
+Source requests and licensing questions: open an issue in the repository above.

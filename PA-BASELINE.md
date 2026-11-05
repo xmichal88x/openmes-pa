@@ -104,19 +104,55 @@ obraz `r19`).
 1. **Brak `.env` i sekretów.** W repo są wyłącznie `backend/.env.example` oraz
    `backend/.env.testing` (klucz testowy upstream). Nie kopiujemy `.env`, `vendor/`,
    `node_modules/`, `public/build/`.
-2. **Deploy wyłącznie z obrazów CI.** Produkcja jest wdrażana przez zmianę
-   `OPENMES_VERSION` na obraz z rejestru; baseline służy jako referencja źródła,
-   audyt i punkt wyjścia do re-aplikacji patchy — nie jest budowany na maszynie
+2. **Deploy wyłącznie z obrazów CI, pinowanych digestem.** Produkcja jest
+   wdrażana przez `OPENMES_IMAGE=repo@sha256:<64 hex>` i
+   `scripts/deploy-openmes.sh`; baseline służy jako referencja źródła, audyt i
+   punkt wyjścia do re-aplikacji patchy — nie jest budowany na maszynie
    produkcyjnej.
 3. **Higiena repo.** Zmiany wprowadzamy przez PR do tego repo; sekrety i artefakty
    builda pozostają poza gitem.
 
+## Permanentny model obrazu
+
+Produkcja nie używa już mutable tagów (`latest`, `OPENMES_VERSION`) ani
+lokalnego aliasu builda. Model jest **fail-closed i odtwarzalny**:
+
+| Element | Stan |
+|---|---|
+| `docker-compose.yml` (5 usług OpenMES: `backend`, `reverb`, `mqtt-listener`, `modbus-poller`, `queue-worker`) | `image: ${OPENMES_IMAGE:?OPENMES_IMAGE is required (repo@sha256:...)}`; brak wartości = compose nie wystartuje |
+| `pull_policy` | `${OPENMES_PULL_POLICY:-never}` — zwykłe `docker compose up` nie pobiera ani nie buduje innego obrazu |
+| `scripts/deploy-openmes.sh` | wymaga `^.+@sha256:[0-9a-f]{64}$`; `docker manifest inspect` gdy obrazu nie ma lokalnie; `docker compose config -q`; pull (jawny lub compose); `up -d` **wszystkich** usług OpenMES; czeka na `/api/health` = 200; sprawdza, że wszystkie kontenery mają ten sam image ID równy pinowanemu; przy błędzie `exit 1`, a po nieudanym `up` próbuje przywrócić poprzedni wspólny obraz |
+| `docker-compose.dev.yml` | bez zmian — dev może dalej budować lokalnie |
+| CI publish (`docker-publish.yml`) | etykieta `org.opencontainers.image.licenses=AGPL-3.0-only`; tagi immutable per commit/tag |
+
+Weryfikacja compose (bez sekretów):
+
+```bash
+OPENMES_IMAGE=ghcr.io/xmichal88x/openmes-pa@sha256:<64 hex> docker compose config -q
+```
+
 ## AGPL — obowiązek udostępnienia źródła
 
-Rdzeń OpenMES jest na licencji **AGPL-3.0** (`LICENSE`); moduły w `modules/` mogą
-być na AFL-3.0, ale moduły PA (`backend/modules/PipelineDashboard`,
-`PlPackagingExtras`) są częścią rdzenia, więc objęte są AGPL. Prowadzenie
-zmodyfikowanej wersji jako usługi sieciowej (MES dla użytkowników) wymaga
-udostępnienia odpowiadającego źródła na tej samej licencji (AGPL §13) —
-**publiczne repo z tym baseline albo formalna oferta udostępnienia źródła**
-(np. na żądanie, w formie pisemnej). Sam obraz Docker nie spełnia tego obowiązku.
+Rdzeń OpenMES jest na licencji **AGPL-3.0-only** (`LICENSE`). Wszystkie modyfikacje
+PA (R05–R22) oraz moduły PA (`backend/modules/PipelineDashboard`,
+`backend/modules/PlPackagingExtras`) są **AGPL-3.0-only** — nie AFL. Warstwa
+`modules/` z upstreamu zachowuje swoje licencje (AFL-3.0 tylko tam, gdzie plik
+niesie odpowiednią notę); żaden moduł PA nie jest AFL.
+
+Prowadzenie zmodyfikowanej wersji jako usługi sieciowej (MES dla użytkowników)
+wymaga udostępnienia odpowiadającego źródła na tej samej licencji (AGPL §13).
+Baseline spełnia to przez:
+
+- publiczne repo `https://github.com/xmichal88x/openmes-pa` jako corresponding source;
+- `NOTICE` (modyfikacja, upstream v0.28.0 `eb184a2`, zakres PA R05–R22, brak gwarancji);
+- `TRADEMARK.md` (zasady użycia nazwy/logo przy forkach);
+- `LICENSE`, `LICENSING.md`, `NOTICE`, `TRADEMARK.md` **kopiowane do obrazu**;
+- `"license": "AGPL-3.0-only"` w `module.json` modułów PA i w `package.json` root;
+- link **„Source (AGPL-3.0)”** w UI (layout auth — widoczny przed logowaniem —
+  oraz layouty aplikacji/operatora), kierujący do `APP_SOURCE_URL` z domyślną
+  wartością `.../tree/pa/0.28`; build może wskazać dokładny commit;
+- bramkę CI `image-build`: obecność czterech plików licencyjnych i 5 modułów
+  w `/var/www/html/modules`.
+
+Sam obraz Docker nie spełnia tego obowiązku — dowodem jest publiczne źródło i
+widoczna w UI oferta.

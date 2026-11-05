@@ -82,7 +82,12 @@ WORKDIR /var/www/html
 
 # Copy application files
 COPY backend/ .
-COPY modules/ ./modules/
+
+# Licensing and attribution must travel with the image, not just the repo:
+# the AGPL source offer and the fork/modification notice are part of the
+# distribution (AGPL §4/§13). .dockerignore carries the matching negations.
+COPY LICENSE LICENSING.md NOTICE TRADEMARK.md /var/www/html/
+
 # Workspace UI package — backend/package.json depends on it via `file:../packages/ui`,
 # which resolves to /var/www/packages/ui relative to this WORKDIR. Must be present
 # before `npm ci` or the `@openmes/ui` import fails to resolve during `npm run build`.

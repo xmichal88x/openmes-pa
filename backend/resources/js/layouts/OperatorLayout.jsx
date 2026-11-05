@@ -2,6 +2,7 @@ import { Link, router, usePage } from '@inertiajs/react';
 import { OnlineDot, ToastProvider } from '@openmes/ui';
 import Tooltip from '../components/Tooltip';
 import ViewAsBar from '../components/ViewAsBar';
+import SourceLink from '../components/SourceLink';
 import { Hook } from '../lib/hooks';
 import { __ } from '../lib/i18n';
 
@@ -127,6 +128,9 @@ export default function OperatorLayout({ children }) {
                 <FlashMessages />
                 {children}
             </main>
+            <div className="px-4 pb-2 text-right">
+                <SourceLink />
+            </div>
             </div>
         </div>
         </ToastProvider>

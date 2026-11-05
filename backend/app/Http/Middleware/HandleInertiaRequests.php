@@ -107,6 +107,9 @@ class HandleInertiaRequests extends Middleware
                 && $user->lines()->where('is_active', true)->count() > 1,
             'csrf_token' => fn () => csrf_token(),
             'appVersion' => fn () => config('version.current'),
+            // AGPL §13 source offer, rendered by components/SourceLink. A build
+            // pins the commit through APP_SOURCE_URL.
+            'sourceUrl' => config('app.source_url'),
             // i18n: the active locale + the switcher's options. The frontend
             // loads the matching lang/<locale>.json chunk itself (see lib/i18n).
             'locale' => fn () => app()->getLocale(),

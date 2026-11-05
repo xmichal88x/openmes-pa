@@ -4,6 +4,7 @@
     "version": "1.0.0",
     "description": "End-to-end production pipeline visibility: Woo → Dolibarr → MES → Nesting → Production",
     "author": "edeseczka",
+    "license": "AGPL-3.0-only",
     "requires_core": ">=0.27.0",
     "provider": "Modules\\PipelineDashboard\\Providers\\PipelineDashboardServiceProvider",
     "hooks": [

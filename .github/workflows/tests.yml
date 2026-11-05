@@ -102,8 +102,19 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Verify PA modules present in image
-        run: docker run --rm --entrypoint sh pa-ci-test -c 'ls /var/www/html/modules | grep -E "PipelineDashboard|PlPackagingExtras"'
+      - name: Verify licensing files and modules in image
+        run: |
+          docker run --rm --entrypoint sh pa-ci-test -c '
+            set -eu
+            for f in LICENSE LICENSING.md NOTICE TRADEMARK.md; do
+              test -f "/var/www/html/$f" || { echo "missing /var/www/html/$f"; exit 1; }
+            done
+            for m in PipelineDashboard PlPackagingExtras ExampleHooks ExampleShowcase OrderPinger; do
+              test -d "/var/www/html/modules/$m" || { echo "missing module $m"; exit 1; }
+            done
+            n=$(ls -d /var/www/html/modules/*/ | wc -l)
+            test "$n" -eq 5 || { echo "expected 5 modules, found $n"; ls /var/www/html/modules; exit 1; }
+          '
 
       - name: Verify Laravel runtime directories exist
         run: docker run --rm --entrypoint sh pa-ci-test -c 'test -d /var/www/html/storage && test -d /var/www/html/bootstrap/cache'

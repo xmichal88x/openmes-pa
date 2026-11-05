@@ -46,6 +46,8 @@ jobs:
           tags: |
             type=ref,event=tag
             type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.licenses=AGPL-3.0-only
           flavor: latest=false
 
       - name: Set up Docker Buildx

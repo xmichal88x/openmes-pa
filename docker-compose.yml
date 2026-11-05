@@ -34,18 +34,13 @@ services:
       - openmmes-network
 
   backend:
-    image: ghcr.io/mes-open/openmes:${OPENMES_VERSION:-latest}
-    # Default to building from the cloned source so `docker compose up` always
-    # runs the current code rather than a stale local image. Builds are
-    # layer-cached → instant when nothing changed.
-    #
-    # Deployers who want the published image instead of a build set
-    # OPENMES_PULL_POLICY=missing and OPENMES_VERSION=<tag>. Prefer that on hosts
-    # where building is unreliable — NAS appliances on pre-6.6 kernels cannot
-    # extract archives inside a build at all (the fchmodat2 syscall is missing and
-    # older libseccomp reports the wrong error), so every image build fails there
-    # while a pulled image runs fine.
-    pull_policy: ${OPENMES_PULL_POLICY:-build}
+    image: ${OPENMES_IMAGE:?OPENMES_IMAGE is required (repo@sha256:...)}
+    # Pinned by digest — a mutable tag can be repointed under us, so deploys
+    # must name an immutable repo@sha256:… reference. scripts/deploy-openmes.sh
+    # enforces the format and verifies every container runs the same image ID.
+    # pull_policy defaults to `never`: fetch explicitly with the deploy script,
+    # so a plain `docker compose up` can never silently run a different build.
+    pull_policy: ${OPENMES_PULL_POLICY:-never}
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -64,6 +59,8 @@ services:
       # along with everything encrypted under it.
       APP_KEY: ${APP_KEY}
       APP_URL: ${APP_URL:-http://localhost}
+      # AGPL §13 corresponding source, rendered by the UI (components/SourceLink).
+      APP_SOURCE_URL: ${APP_SOURCE_URL:-https://github.com/xmichal88x/openmes-pa/tree/pa/0.28}
       # Sanctum SPA stateful hosts. Empty by default (production derives them
       # from APP_URL). Set this when serving on a host:port the app URL doesn't
       # cover — e.g. localhost:8084 or a LAN IP — or the live-sync /api
@@ -117,18 +114,13 @@ services:
   # Single multiplexed WebSocket (Pusher protocol). Laravel publishes deltas to
   # it; clients connect through Caddy (/app/*). NOT exposed publicly.
   reverb:
-    image: ghcr.io/mes-open/openmes:${OPENMES_VERSION:-latest}
-    # Default to building from the cloned source so `docker compose up` always
-    # runs the current code rather than a stale local image. Builds are
-    # layer-cached → instant when nothing changed.
-    #
-    # Deployers who want the published image instead of a build set
-    # OPENMES_PULL_POLICY=missing and OPENMES_VERSION=<tag>. Prefer that on hosts
-    # where building is unreliable — NAS appliances on pre-6.6 kernels cannot
-    # extract archives inside a build at all (the fchmodat2 syscall is missing and
-    # older libseccomp reports the wrong error), so every image build fails there
-    # while a pulled image runs fine.
-    pull_policy: ${OPENMES_PULL_POLICY:-build}
+    image: ${OPENMES_IMAGE:?OPENMES_IMAGE is required (repo@sha256:...)}
+    # Pinned by digest — a mutable tag can be repointed under us, so deploys
+    # must name an immutable repo@sha256:… reference. scripts/deploy-openmes.sh
+    # enforces the format and verifies every container runs the same image ID.
+    # pull_policy defaults to `never`: fetch explicitly with the deploy script,
+    # so a plain `docker compose up` can never silently run a different build.
+    pull_policy: ${OPENMES_PULL_POLICY:-never}
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -169,18 +161,13 @@ services:
   # To pin it to a single connection instead, set MQTT_CONNECTION_ID and add
   # `--connection=${MQTT_CONNECTION_ID}` back to the command below.
   mqtt-listener:
-    image: ghcr.io/mes-open/openmes:${OPENMES_VERSION:-latest}
-    # Default to building from the cloned source so `docker compose up` always
-    # runs the current code rather than a stale local image. Builds are
-    # layer-cached → instant when nothing changed.
-    #
-    # Deployers who want the published image instead of a build set
-    # OPENMES_PULL_POLICY=missing and OPENMES_VERSION=<tag>. Prefer that on hosts
-    # where building is unreliable — NAS appliances on pre-6.6 kernels cannot
-    # extract archives inside a build at all (the fchmodat2 syscall is missing and
-    # older libseccomp reports the wrong error), so every image build fails there
-    # while a pulled image runs fine.
-    pull_policy: ${OPENMES_PULL_POLICY:-build}
+    image: ${OPENMES_IMAGE:?OPENMES_IMAGE is required (repo@sha256:...)}
+    # Pinned by digest — a mutable tag can be repointed under us, so deploys
+    # must name an immutable repo@sha256:… reference. scripts/deploy-openmes.sh
+    # enforces the format and verifies every container runs the same image ID.
+    # pull_policy defaults to `never`: fetch explicitly with the deploy script,
+    # so a plain `docker compose up` can never silently run a different build.
+    pull_policy: ${OPENMES_PULL_POLICY:-never}
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -225,18 +212,13 @@ services:
   # One instance per active Modbus machine_connection.
   # Example: MODBUS_CONNECTION_ID=1 docker compose --profile connectivity up -d modbus-poller
   modbus-poller:
-    image: ghcr.io/mes-open/openmes:${OPENMES_VERSION:-latest}
-    # Default to building from the cloned source so `docker compose up` always
-    # runs the current code rather than a stale local image. Builds are
-    # layer-cached → instant when nothing changed.
-    #
-    # Deployers who want the published image instead of a build set
-    # OPENMES_PULL_POLICY=missing and OPENMES_VERSION=<tag>. Prefer that on hosts
-    # where building is unreliable — NAS appliances on pre-6.6 kernels cannot
-    # extract archives inside a build at all (the fchmodat2 syscall is missing and
-    # older libseccomp reports the wrong error), so every image build fails there
-    # while a pulled image runs fine.
-    pull_policy: ${OPENMES_PULL_POLICY:-build}
+    image: ${OPENMES_IMAGE:?OPENMES_IMAGE is required (repo@sha256:...)}
+    # Pinned by digest — a mutable tag can be repointed under us, so deploys
+    # must name an immutable repo@sha256:… reference. scripts/deploy-openmes.sh
+    # enforces the format and verifies every container runs the same image ID.
+    # pull_policy defaults to `never`: fetch explicitly with the deploy script,
+    # so a plain `docker compose up` can never silently run a different build.
+    pull_policy: ${OPENMES_PULL_POLICY:-never}
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -307,18 +289,13 @@ services:
   # you use MQTT or other queued work.
   # Example: docker compose --profile workers up -d queue-worker
   queue-worker:
-    image: ghcr.io/mes-open/openmes:${OPENMES_VERSION:-latest}
-    # Default to building from the cloned source so `docker compose up` always
-    # runs the current code rather than a stale local image. Builds are
-    # layer-cached → instant when nothing changed.
-    #
-    # Deployers who want the published image instead of a build set
-    # OPENMES_PULL_POLICY=missing and OPENMES_VERSION=<tag>. Prefer that on hosts
-    # where building is unreliable — NAS appliances on pre-6.6 kernels cannot
-    # extract archives inside a build at all (the fchmodat2 syscall is missing and
-    # older libseccomp reports the wrong error), so every image build fails there
-    # while a pulled image runs fine.
-    pull_policy: ${OPENMES_PULL_POLICY:-build}
+    image: ${OPENMES_IMAGE:?OPENMES_IMAGE is required (repo@sha256:...)}
+    # Pinned by digest — a mutable tag can be repointed under us, so deploys
+    # must name an immutable repo@sha256:… reference. scripts/deploy-openmes.sh
+    # enforces the format and verifies every container runs the same image ID.
+    # pull_policy defaults to `never`: fetch explicitly with the deploy script,
+    # so a plain `docker compose up` can never silently run a different build.
+    pull_policy: ${OPENMES_PULL_POLICY:-never}
     build:
       context: .
       dockerfile: backend/Dockerfile

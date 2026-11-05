@@ -1,5 +1,6 @@
 import { usePage } from '@inertiajs/react';
 import { Dropdown } from '@openmes/ui';
+import SourceLink from '../components/SourceLink';
 
 /**
  * Centered card chrome for unauthenticated pages — the React port of
@@ -53,6 +54,7 @@ export default function AuthLayout({ children }) {
                         />
                     )}
                     <p className="font-mono text-[11px] text-om-faint">&copy; {new Date().getFullYear()} All rights reserved.</p>
+                    <p><SourceLink /></p>
                 </div>
             </div>
         </div>

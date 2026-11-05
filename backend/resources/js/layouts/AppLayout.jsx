@@ -7,6 +7,7 @@ import { filterNavItems, flattenNavItems, groupVisible, searchResultKeys } from 
 import LiveAlertCount from '../components/LiveAlertCount';
 import ViewAsBar from '../components/ViewAsBar';
 import LatestAlerts from '../components/LatestAlerts';
+import SourceLink from '../components/SourceLink';
 import Tooltip from '../components/Tooltip';
 import HoverPanel from '../components/HoverPanel';
 import { ToastProvider } from '@openmes/ui';
@@ -702,6 +703,11 @@ function Sidebar({
                         <UiIcon name="settings" size={20} className="shrink-0" />
                         {showLabels && <span>{__('Settings')}</span>}
                     </Link>
+                </div>
+
+                {/* AGPL §13 source offer — collapsed rail keeps just the link. */}
+                <div className={`pb-1 ${showLabels ? 'px-4' : 'px-2 flex justify-center'}`}>
+                    <SourceLink className={showLabels ? '' : 'text-[10px]'} />
                 </div>
 
                 {/* User + logout */}
