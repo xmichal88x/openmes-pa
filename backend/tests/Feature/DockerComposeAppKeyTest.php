@@ -29,7 +29,11 @@ class DockerComposeAppKeyTest extends TestCase
         $sprawdzone = [];
 
         foreach ($compose['services'] ?? [] as $nazwa => $usluga) {
-            if (! str_contains((string) ($usluga['image'] ?? ''), 'mes-open/openmes')) {
+            $obraz = (string) ($usluga['image'] ?? '');
+
+            // Production pins the image through OPENMES_IMAGE (repo@sha256:…);
+            // older/upstream checkouts name the registry path directly.
+            if (! str_contains($obraz, 'mes-open/openmes') && ! str_contains($obraz, 'OPENMES_IMAGE')) {
                 continue;
             }
 
