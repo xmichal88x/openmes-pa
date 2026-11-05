@@ -34,9 +34,19 @@ class HandleInertiaRequests extends Middleware
                     // Granted admin tabs as {key,label,url} — drives the operator
                     // screen's sidebar (OperatorLayout) so operators can reach the
                     // panel pages they've been given. Empty when none granted.
-                    'accessibleTabLinks' => $this->accessibleTabLinks($user),
+                    'accessibleTabLinks' => $this->accessibleTabLinks($user, $request),
+                    // Ability flags for UI gating (hide buttons the user can't
+                    // use). UX only — controllers and Form Requests enforce.
+                    'can' => [
+                        'createWorkOrders' => $user->can('create', \App\Models\WorkOrder::class),
+                        'editWorkOrders' => $user->can('edit work orders'),
+                    ],
                 ] : null,
             ],
+            // The administrator's view switcher (admin | supervisor | operator).
+            // Sent only to Admins — null for everyone else, so no other role ever
+            // receives the bar. Presentation only; permissions do not change.
+            'viewAs' => \App\Support\ViewAs::current($request),
             // Optional feature modules switched on for this installation. The
             // admin nav gets this filtering for free through `accessibleTabs`
             // (TabRegistry consults ModuleRegistry); the supervisor tree is gated
@@ -104,6 +114,9 @@ class HandleInertiaRequests extends Middleware
             // Plant timezone — the frontend formats all dates/times in this zone
             // (config/app.php → APP_TIMEZONE) instead of the viewer's browser zone.
             'timezone' => fn () => config('app.timezone'),
+            // Installation currency (ISO 4217) — lib/money.js formats every
+            // pay and cost amount with it.
+            'currency' => fn () => \App\Support\CurrencyRegistry::current(),
             'flash' => [
                 'success' => fn () => $request->session()->get('success'),
                 'error' => fn () => $request->session()->get('error'),
@@ -132,9 +145,16 @@ class HandleInertiaRequests extends Middleware
      *
      * @return array<int, array{key: string, label: string, url: string|null}>
      */
-    private function accessibleTabLinks($user): array
+    private function accessibleTabLinks($user, Request $request): array
     {
         $labels = \App\Support\TabRegistry::labels();
+
+        // An administrator previewing the operator view sees the tabs the
+        // Operator role grants, not their own — otherwise the operator screen
+        // would list every admin tab, which no operator ever sees.
+        $keys = \App\Support\ViewAs::current($request) === \App\Support\ViewAs::OPERATOR
+            ? \App\Support\TabRegistry::accessibleForRole('Operator')
+            : $this->accessibleTabs($user);
 
         return array_map(
             fn (string $key) => [
@@ -144,7 +164,7 @@ class HandleInertiaRequests extends Middleware
             ],
             // Resolved once per request — the tab set is not cheap to compute
             // and both this and the `accessibleTabs` prop need it.
-            $this->accessibleTabs($user),
+            $keys,
         );
     }
 
@@ -169,6 +189,11 @@ class HandleInertiaRequests extends Middleware
         if ($user && $request->routeIs('operator.*')) {
             $screens = app(\App\Services\Production\OperatorScreens::class)->forRequest($request);
             $tabs = array_values(array_filter($tabs, fn ($tab) => in_array($tab['key'], $screens, true)));
+        }
+        // Inbound inspections follow the person, not the bench: whoever holds
+        // an inspection permission (InspectionPolicy) sees the tab everywhere.
+        if ($user?->can('viewAny', \App\Models\Inspection::class)) {
+            $tabs[] = ['key' => 'inspections', 'label' => 'Inspections', 'url' => '/operator/inspections', 'prefixes' => ['/operator/inspections']];
         }
 
         return array_values(app(\App\Extension\FilterRegistry::class)->filter('operator.tabs', $tabs, ['user' => $user]));
