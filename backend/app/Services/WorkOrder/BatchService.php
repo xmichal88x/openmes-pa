@@ -2,6 +2,10 @@
 
 namespace App\Services\WorkOrder;
 
+use App\Exceptions\StartConfirmationRequiredException;
+use App\Exceptions\StartPreflightException;
+use App\Exceptions\SystemFanoutForbiddenException;
+use App\Models\AuditLog;
 use App\Models\Batch;
 use App\Models\BatchStep;
 use App\Models\QualityControlTask;
@@ -14,13 +18,18 @@ use App\Services\Material\MaterialAllocationService;
 use App\Services\Quality\QualityTriggerService;
 use App\Support\ProductionFlow;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class BatchService
 {
+    /** Last queue preflight verdict for this request (warning surfaced by controllers). */
+    protected ?array $lastPreflight = null;
+
     public function __construct(
         protected WorkOrderService $workOrderService,
         protected MaterialAllocationService $allocationService,
         protected QualityTriggerService $qualityTriggerService,
+        protected StartPreflightService $startPreflight,
     ) {}
 
     /**
@@ -32,7 +41,55 @@ class BatchService
      *
      * @throws \Exception
      */
-    public function startStep(BatchStep $step, User $user, array $picksByMaterial = []): BatchStep
+    public function startStep(BatchStep $step, User $user, array $picksByMaterial = [], bool $confirmSharedSheet = false, bool $autoStart = false, bool $systemFanout = false): BatchStep
+    {
+        $this->lastPreflight = null;
+
+        if ($systemFanout && ! $user->can('start system fanout')) {
+            $this->auditPreflight($step, $user, 'start_preflight.denied', ['state' => 'forbidden'], [
+                'reason' => 'system_fanout_forbidden',
+                'requested_system_fanout' => true,
+            ]);
+
+            throw new SystemFanoutForbiddenException(__('System fan-out start is restricted to the machine gateway.'));
+        }
+
+        // Queue preflight runs *before* the transaction and before any status
+        // change. An explicit start takes a short-lived lease; the read-only
+        // auto-start path never does. The lease is released only after the
+        // transaction committed (or after it failed), never before.
+        $leaseToken = null;
+        $committed = false;
+
+        try {
+            $preflight = $this->runStartPreflight($step, $user, $confirmSharedSheet, $autoStart, $systemFanout);
+
+            if ($preflight === null) {
+                return $step;
+            }
+
+            $leaseToken = $this->leaseTokenFrom($preflight);
+
+            $started = $this->commitStart($step, $user, $picksByMaterial);
+
+            $committed = true;
+
+            return $started;
+        } finally {
+            if (! $autoStart) {
+                $leaseToken ??= $this->leaseTokenFrom($this->lastPreflight);
+
+                if ($leaseToken !== null) {
+                    $this->startPreflight->releaseLease($leaseToken, $committed);
+                }
+            }
+        }
+    }
+
+    /**
+     * @param  array<int, array<int, array{material_lot_id: int|string, picked_qty: int|float|string}>>  $picksByMaterial
+     */
+    private function commitStart(BatchStep $step, User $user, array $picksByMaterial): BatchStep
     {
         return DB::transaction(function () use ($step, $user, $picksByMaterial) {
             $step = $this->lockProductionStep($step);
@@ -94,6 +151,209 @@ class BatchService
 
             return $step->fresh();
         });
+    }
+
+    /** Last queue preflight verdict (warning included) for the current call. */
+    public function lastPreflight(): ?array
+    {
+        return $this->lastPreflight;
+    }
+
+    /**
+     * Evaluate the queue start-preflight contract for a step.
+     *
+     * @return array|null the verdict, or null when an auto-start must be
+     *                    deferred (merged target sheet) and the step left READY
+     *
+     * @throws StartPreflightException when the queue blocks the start
+     * @throws StartConfirmationRequiredException when the operator must confirm a shared sheet
+     */
+    private function runStartPreflight(BatchStep $step, User $user, bool $confirmSharedSheet, bool $autoStart, bool $systemFanout = false): ?array
+    {
+        // Only cutting/CNC steps are nested and shared. Other steps start
+        // without an HTTP round-trip and without a queue warning.
+        if (! $this->startPreflight->isCncStep($step)) {
+            $this->lastPreflight = null;
+
+            return ['state' => 'ok'];
+        }
+
+        // Auto-start only previews (read-only): it must not take a lease for
+        // work it may end up deferring. An explicit start acquires the lease.
+        $this->lastPreflight = $autoStart
+            ? $this->startPreflight->check($step)
+            : $this->startPreflight->acquireLease($step, $confirmSharedSheet, $systemFanout);
+
+        $preflight = $this->lastPreflight;
+        $state = $preflight['state'] ?? 'unknown';
+
+        if ($state === 'rebuilding') {
+            $this->auditPreflight($step, $user, 'start_preflight.blocked', $preflight, ['reason' => 'rebuilding']);
+
+            throw new StartPreflightException('rebuilding', $this->preflightContext($preflight, 'rebuilding'));
+        }
+
+        if ($state === 'blocked') {
+            $reason = (string) ($preflight['reason'] ?? '');
+
+            if ($reason === 'cancel_in_progress') {
+                $this->auditPreflight($step, $user, 'start_preflight.blocked', $preflight, ['reason' => 'rebuilding', 'queue_reason' => $reason]);
+
+                throw new StartPreflightException('rebuilding', $this->blockedContext($preflight, 'cancel_in_progress'));
+            }
+
+            if ($reason === 'lease_active') {
+                $this->auditPreflight($step, $user, 'start_preflight.blocked', $preflight, ['reason' => 'lease_active', 'queue_reason' => $reason]);
+
+                throw new StartPreflightException('lease_active', $this->blockedContext($preflight, 'lease_active'));
+            }
+
+            $this->auditPreflight($step, $user, 'start_preflight.blocked', $preflight, ['reason' => $reason !== '' ? $reason : 'blocked', 'queue_reason' => $reason]);
+
+            throw new StartPreflightException($reason !== '' ? $reason : 'blocked', $this->blockedContext($preflight, $reason));
+        }
+
+        if ($state === 'merged' && ($preflight['is_source'] ?? false)) {
+            // A source order may only start as part of a confirmed system
+            // fan-out: the queue lease then covers the target sheet, so the
+            // source start is the same physical job. Operators (no fan-out)
+            // are still blocked and must start the merged target instead.
+            if (! ($systemFanout && $confirmSharedSheet)) {
+                $this->auditPreflight($step, $user, 'start_preflight.blocked', $preflight, ['reason' => 'source']);
+
+                throw new StartPreflightException('source', $this->preflightContext($preflight, 'source'));
+            }
+
+            $this->auditPreflight($step, $user, 'start_preflight.confirmed', $preflight, ['reason' => 'system_fanout']);
+
+            return $preflight;
+        }
+
+        if ($state === 'merged' && ! $confirmSharedSheet) {
+            // Auto-start (e.g. passing pieces through a station) must never
+            // block the previous step's completion: leave the next step READY
+            // and let the operator start it explicitly.
+            if ($autoStart) {
+                Log::warning('start_preflight.auto_start_deferred', [
+                    'step_id' => $step->id,
+                    'batch_id' => $step->batch_id,
+                    'n_orders' => $preflight['n_orders'] ?? 0,
+                    'target_job' => $preflight['target_job'] ?? null,
+                ]);
+
+                return null;
+            }
+
+            $this->auditPreflight($step, $user, 'start_preflight.confirm_required', $preflight, ['reason' => 'shared_sheet']);
+
+            throw new StartConfirmationRequiredException($this->preflightContext($preflight, 'confirm'));
+        }
+
+        if ($state === 'merged') {
+            $this->auditPreflight($step, $user, 'start_preflight.confirmed', $preflight, ['reason' => 'shared_sheet']);
+        }
+
+        if (! empty($preflight['warning'])) {
+            $this->auditPreflight($step, $user, 'start_preflight.warning', $preflight, ['reason' => $preflight['warning']]);
+        }
+
+        return $preflight;
+    }
+
+    /**
+     * @param  array<string, mixed>  $preflight
+     * @return array{n_orders: int, orders: array<int, mixed>, target_job: string|null, message: string}
+     */
+    private function preflightContext(array $preflight, string $reason): array
+    {
+        $nOrders = (int) ($preflight['n_orders'] ?? 0);
+        $targetJob = $preflight['target_job'] ?? null;
+
+        $message = match ($reason) {
+            'rebuilding' => __('Start is blocked: the queue is rebuilding nesting for this order. Try again shortly.'),
+            'source' => __('This order is part of a merged sheet (:count orders). Start the merged job :job instead.', [
+                'count' => $nOrders,
+                'job' => (string) ($targetJob ?? '—'),
+            ]),
+            'lease_active' => __('Inny start tego arkusza jest w toku — spróbuj za chwilę.'),
+            default => __('This sheet is shared by :count orders. Confirm to start the shared work for all of them.', [
+                'count' => $nOrders,
+            ]),
+        };
+
+        return [
+            'n_orders' => $nOrders,
+            'orders' => $preflight['orders'] ?? [],
+            'target_job' => $targetJob,
+            'message' => $message,
+        ];
+    }
+
+    /**
+     * Context for a `blocked` queue verdict. The queue reason is kept for the
+     * controllers while the user-facing message comes from the backend.
+     *
+     * @param  array<string, mixed>  $preflight
+     * @return array<string, mixed>
+     */
+    private function blockedContext(array $preflight, string $reason): array
+    {
+        $context = $this->preflightContext(
+            $preflight,
+            $reason === 'lease_active' ? 'lease_active' : 'rebuilding',
+        );
+
+        $context['queue_reason'] = $preflight['reason'] ?? $reason;
+        $context['message'] = match ($reason) {
+            'cancel_in_progress' => __('Arkusz jest przebudowywany — spróbuj za chwilę.'),
+            'lease_active' => __('Inny start tego arkusza jest w toku — spróbuj za chwilę.'),
+            default => (string) ($preflight['message'] ?? '') !== ''
+                ? (string) $preflight['message']
+                : __('Start is blocked by the queue preflight (:reason).', ['reason' => $reason !== '' ? $reason : 'blocked']),
+        };
+
+        return $context;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $preflight
+     */
+    private function leaseTokenFrom(?array $preflight): ?string
+    {
+        $token = $preflight['lease_token'] ?? null;
+
+        return is_string($token) && $token !== '' ? $token : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $preflight
+     * @param  array<string, mixed>  $extra
+     */
+    private function auditPreflight(BatchStep $step, ?User $user, string $action, array $preflight, array $extra = []): void
+    {
+        try {
+            AuditLog::create([
+                'user_id' => $user?->id,
+                'entity_type' => 'batch_step',
+                'entity_id' => $step->id,
+                'action' => $action,
+                'before_state' => ['status' => $step->status],
+                'after_state' => array_merge([
+                    'state' => $preflight['state'] ?? null,
+                    'n_orders' => $preflight['n_orders'] ?? 0,
+                    'target_job' => $preflight['target_job'] ?? null,
+                    'is_source' => $preflight['is_source'] ?? false,
+                ], $extra),
+                'ip_address' => request()->ip(),
+                'user_agent' => request()->userAgent(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('start_preflight.audit_failed', [
+                'step_id' => $step->id,
+                'action' => $action,
+                'message' => $e->getMessage(),
+            ]);
+        }
     }
 
     /** System setting `hold_on_material_shortage` (off unless switched on). */
@@ -409,7 +669,21 @@ class BatchService
                 }
 
                 if (in_array($next->status, [BatchStep::STATUS_PENDING, BatchStep::STATUS_READY], true)) {
-                    $next = $this->startStep($next, $user);
+                    $next = $this->startStep($next, $user, [], false, true);
+
+                    // The queue may defer an auto-start (merged target sheet):
+                    // the step stays READY. Logging pieces on a step that never
+                    // started would throw and roll back the operator's log, so
+                    // leave it for an explicit start and carry on.
+                    if ($next->fresh()->status !== BatchStep::STATUS_IN_PROGRESS) {
+                        Log::warning('start_preflight.auto_start_deferred_skip_quantity', [
+                            'step_id' => $next->id,
+                            'batch_id' => $next->batch_id,
+                            'previous_step_id' => $first->id,
+                        ]);
+
+                        continue;
+                    }
                 }
 
                 $this->recordQuantity($next, $user, $good);

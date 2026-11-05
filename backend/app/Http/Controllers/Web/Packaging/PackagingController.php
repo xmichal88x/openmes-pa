@@ -10,6 +10,7 @@ use App\Http\Requests\ScanUnitRequest;
 use App\Http\Requests\StartPackingStepRequest;
 use App\Models\BatchStep;
 use App\Models\Line;
+use App\Models\PackagingBox;
 use App\Models\PackagingScanLog;
 use App\Models\Pallet;
 use App\Models\SerialUnit;
@@ -18,6 +19,7 @@ use App\Models\UnitCarton;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderEan;
 use App\Services\Material\MaterialAllocationService;
+use App\Services\Packaging\PackagingScanService;
 use App\Services\Packaging\UnitPackingService;
 use App\Services\Production\OperatorWorkstationSelection;
 use App\Services\Production\PalletBackflushService;
@@ -118,7 +120,7 @@ class PackagingController extends Controller
         ]);
     }
 
-    public function scan(PackagingScanRequest $request)
+    public function scan(PackagingScanRequest $request, PackagingScanService $scanService)
     {
         $validated = $request->validated();
 
@@ -132,6 +134,12 @@ class PackagingController extends Controller
 
         if (! $workOrder) {
             return response()->json(['message' => __('Work order not found')], 404);
+        }
+
+        // The station can pin the order the operator is packing. A code from
+        // another order is rejected before it is consumed (cross-order mix-up).
+        if (! empty($validated['work_order_id']) && (int) $eanRecord->work_order_id !== (int) $validated['work_order_id']) {
+            return response()->json(['message' => __('Code belongs to a different work order')], 409);
         }
 
         if (! WorkOrder::whereKey($workOrder->id)->packable()->exists()) {
@@ -160,24 +168,38 @@ class PackagingController extends Controller
             }
         }
 
-        $workOrder->increment('packed_qty');
-        \App\Sync\CollectionBroadcaster::flush($workOrder); // increment() bypasses model events
-        $workOrder->refresh();
+        // Optional carton assignment: the box must be open and belong to the
+        // same order; a box already on a pallet moves the scan there.
+        $box = null;
+        if (! empty($validated['box_id'])) {
+            $box = PackagingBox::when(
+                is_numeric($validated['box_id']),
+                fn ($q) => $q->whereKey((int) $validated['box_id']),
+                fn ($q) => $q->where('box_id', (string) $validated['box_id']),
+            )->first();
 
-        if ($pallet) {
-            $pallet->increment('qty');
-            \App\Sync\CollectionBroadcaster::flush($pallet); // increment() bypasses model events
-            $pallet->refresh()->loadMissing(['workOrder.line', 'batch']);
+            if (! $box) {
+                return response()->json(['message' => __('Unknown box')], 404);
+            }
+
+            if ((int) $box->work_order_id !== (int) $workOrder->id) {
+                return response()->json(['message' => __('Box belongs to a different work order')], 409);
+            }
+
+            if ($pallet && $box->pallet_id && (int) $box->pallet_id !== (int) $pallet->id) {
+                return response()->json(['message' => __('Box is on another pallet')], 409);
+            }
+
+            $pallet ??= $box->pallet;
         }
 
-        PackagingScanLog::create([
-            'user_id' => $request->user()?->id,
-            'work_order_id' => $workOrder->id,
-            'pallet_id' => $pallet?->id,
-            'ean' => $validated['ean'],
-            'product_name' => $this->productLabel($workOrder),
-            'scanned_at' => now(),
-        ]);
+        $result = $scanService->scan($eanRecord, $workOrder, $pallet, $request->user(), $box);
+        $workOrder = $result['work_order'];
+        $box = $result['box'];
+
+        if ($pallet) {
+            $pallet->refresh()->loadMissing(['workOrder.line', 'batch']);
+        }
 
         return response()->json([
             'work_order' => [
@@ -188,6 +210,15 @@ class PackagingController extends Controller
                 'packed_qty' => $workOrder->packed_qty,
             ],
             'pallet' => $pallet ? $this->palletPayload($pallet) : null,
+            'box' => $box ? [
+                'id' => $box->id,
+                'box_id' => $box->box_id,
+                'part_count' => (int) $box->part_count,
+                'status' => $box->status,
+                'pallet_no' => $box->pallet?->pallet_no,
+            ] : null,
+            'remaining' => $result['remaining'],
+            'expected_total' => $result['expected_total'],
             'message' => __('Packed: :name', ['name' => $this->productLabel($workOrder)]),
         ]);
     }
@@ -368,6 +399,11 @@ class PackagingController extends Controller
             $query->where('work_order_id', $workOrderId);
         }
 
+        // The station's boxes screen asks for boxes-mode pallets only.
+        if ($kind = $request->query('kind')) {
+            $query->where('kind', $kind);
+        }
+
         // Filter by production line (derived from the pallet's work order) so the
         // station can show only the open pallets relevant to a given line.
         if ($lineId = $request->integer('line_id')) {
@@ -403,6 +439,7 @@ class PackagingController extends Controller
             'work_order_id' => $workOrder->id,
             'batch_id' => $batchId,
             'status' => PalletStatus::Open->value,
+            'kind' => $request->input('kind', Pallet::KIND_LOOSE),
             'location' => $request->input('location'),
             'qty' => 0,
             'active_by_id' => $request->user()->id,
@@ -414,7 +451,9 @@ class PackagingController extends Controller
         // by the produced quantity and deduct it from stock, linked to the pallet.
         // Without an explicit produced_qty the batch is backflushed once (at its
         // first pallet), so splitting a batch across pallets doesn't double-book.
-        if ($backflush->isEnabled()) {
+        // A boxes pallet is only consumed once its boxes (and therefore qty) are
+        // known - that happens on close, not on create (R07-15).
+        if (! $pallet->isBoxesMode() && $backflush->isEnabled()) {
             $explicitQty = $request->filled('produced_qty') ? (float) $request->input('produced_qty') : null;
             $backflush->backflushForPallet($pallet, $explicitQty, $request->user());
         }
@@ -425,22 +464,30 @@ class PackagingController extends Controller
         ], 201);
     }
 
-    public function closePallet(Pallet $pallet)
+    public function closePallet(Request $request, Pallet $pallet, PalletBackflushService $backflush)
     {
         // Only the request that actually closes it books the pallet's packaging:
-        // a double click or a second station must not close it twice.
-        $closed = Pallet::whereKey($pallet->id)->where('status', PalletStatus::Open->value)
-            ->update(['status' => PalletStatus::Closed->value, 'active_by_id' => null, 'active_workstation_id' => null, 'activated_at' => null]);
-        if ($closed === 0) {
-            return response()->json(['message' => __('Pallet is not open')], 422);
-        }
-        $pallet->refresh();
-        $this->packing()->palletClosed($pallet);
+        // a double click or a second station must not close it twice. A boxes
+        // pallet is backflushed here, from its (box-derived) qty - never on
+        // create or on a scan, so the milestone is booked exactly once.
+        return DB::transaction(function () use ($request, $pallet, $backflush) {
+            $closed = Pallet::whereKey($pallet->id)->where('status', PalletStatus::Open->value)
+                ->update(['status' => PalletStatus::Closed->value, 'active_by_id' => null, 'active_workstation_id' => null, 'activated_at' => null]);
+            if ($closed === 0) {
+                return response()->json(['message' => __('Pallet is not open')], 422);
+            }
+            $pallet->refresh();
+            $this->packing()->palletClosed($pallet);
 
-        return response()->json([
-            'pallet' => $this->palletPayload($pallet->fresh(['workOrder.line', 'batch'])),
-            'message' => __('Pallet :no closed', ['no' => $pallet->pallet_no]),
-        ]);
+            if ($pallet->isBoxesMode() && $backflush->isEnabled() && (float) $pallet->qty > 0) {
+                $backflush->backflushForPallet($pallet, (float) $pallet->qty, $request->user());
+            }
+
+            return response()->json([
+                'pallet' => $this->palletPayload($pallet->fresh(['workOrder.line', 'batch'])),
+                'message' => __('Pallet :no closed', ['no' => $pallet->pallet_no]),
+            ]);
+        });
     }
 
     /**
@@ -586,7 +633,7 @@ class PackagingController extends Controller
 
     private function buildItemList(): array
     {
-        $eansByWorkOrder = WorkOrderEan::select('work_order_id', 'ean')
+        $eansByWorkOrder = WorkOrderEan::select('work_order_id', 'ean', 'state')
             ->get()
             ->groupBy('work_order_id');
 
@@ -598,17 +645,34 @@ class PackagingController extends Controller
             ->map(function ($wo) use ($eansByWorkOrder) {
                 $planned = (int) $wo->planned_qty;
                 $packed = (int) $wo->packed_qty;
+                $codes = $eansByWorkOrder[$wo->id];
+                $remainingCodes = $codes
+                    ->where('state', WorkOrderEan::STATE_EXPECTED)
+                    ->pluck('ean')
+                    ->sort()
+                    ->values();
 
                 return [
                     'id' => $wo->id,
                     'order_no' => $wo->order_no,
                     'product' => $this->productLabel($wo),
                     'line' => $wo->line?->name,
+                    'line_code' => $wo->line?->code,
                     'planned_qty' => $planned,
                     'packed_qty' => $packed,
                     'progress' => $planned > 0 ? min(100, (int) round($packed / $planned * 100)) : 0,
                     'done' => $planned > 0 && $packed >= $planned,
-                    'eans' => $eansByWorkOrder[$wo->id]->pluck('ean')->values(),
+                    'expected_count' => $codes->where('state', WorkOrderEan::STATE_EXPECTED)->count(),
+                    'scanned_count' => $codes->where('state', WorkOrderEan::STATE_SCANNED)->count(),
+                    'voided_count' => $codes->where('state', WorkOrderEan::STATE_VOID)->count(),
+                    'remaining_codes' => $remainingCodes,
+                    // Voided labels are no longer packable pieces — keep them out
+                    // of the code list so the station does not invite a re-scan.
+                    'eans' => $codes
+                        ->where('state', '!=', WorkOrderEan::STATE_VOID)
+                        ->pluck('ean')
+                        ->sort()
+                        ->values(),
                     // Batches the operator can assign a new pallet to (one per pallet).
                     'batches' => $wo->batches->map(fn ($b) => [
                         'id' => $b->id,

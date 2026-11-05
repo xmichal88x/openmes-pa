@@ -15,7 +15,9 @@ class PackagingScanRequest extends FormRequest
     {
         return [
             'ean' => 'required|string|max:100',
+            'work_order_id' => 'nullable|integer|exists:work_orders,id',
             'pallet_id' => 'nullable|integer|exists:pallets,id',
+            'box_id' => 'nullable',
         ];
     }
 }

@@ -608,6 +608,22 @@ class WorkOrder extends Model
         return $this->hasMany(WorkOrderEan::class);
     }
 
+    /** Cartons packed for this work order (R07). */
+    public function packagingBoxes(): HasMany
+    {
+        return $this->hasMany(PackagingBox::class);
+    }
+
+    /**
+     * Dispatch outbox entries for this work order (R07). Intentionally not in
+     * softDeleteCascades(): a dispatch is append-only history, so deleting the
+     * order must not wipe the shipment trail.
+     */
+    public function packagingDispatches(): HasMany
+    {
+        return $this->hasMany(PackagingDispatch::class);
+    }
+
     /**
      * Get the scrap entries reported against this work order.
      */

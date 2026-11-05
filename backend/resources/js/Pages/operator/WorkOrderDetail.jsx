@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 import { Badge, Button, Checkbox, Dropdown, Icon, ProgressBar, StatusBadge, StatusPill } from '@openmes/ui';
 import { DataTable } from '@openmes/ui/table';
@@ -6,6 +6,11 @@ import OperatorLayout from '../../layouts/OperatorLayout';
 import AppDataTable from '../../components/AppDataTable';
 import LineSync from '../../components/LineSync';
 import LabelPrintMenu from '../../components/LabelPrintMenu';
+import MachineCommandPanel from '../../components/MachineCommandPanel';
+import ModalShell from '../../components/ModalShell';
+import SharedSheetConfirmModal from '../../components/SharedSheetConfirmModal';
+import PreflightWarningBanner from '../../components/PreflightWarningBanner';
+import { PREFLIGHT_ACTIONS, resolvePreflightAction, startErrorKey, startPayload } from '../../components/machine/preflightLogic';
 import CustomFields from '../../components/CustomFields';
 import Tooltip from '../../components/Tooltip';
 import RoutingGraph from '../../components/flow/RoutingGraph';
@@ -162,39 +167,24 @@ function ChevronIcon({ open }) {
 }
 
 // ---------------------------------------------------------------------------
-// Modal shell — §09 idiom (radius 12, deep shadow, header hairline + mono
-// subtitle, panel footer supplied by callers inside their <form>).
+// Start preflight messages (R15/3). The mapping itself lives in
+// components/machine/preflightLogic.js; this only renders the copy.
 // ---------------------------------------------------------------------------
 
-function ModalShell({ title, subtitle, onClose, children }) {
-    return (
-        <div className="fixed inset-0 z-50 overflow-y-auto">
-            <div className="fixed inset-0 bg-[rgba(10,9,8,0.4)]" onClick={onClose} />
-            <div className="flex min-h-full items-center justify-center p-4">
-                <div
-                    className="relative w-full max-w-md overflow-hidden rounded-om border border-om-line bg-om-card shadow-[0_20px_50px_-20px_rgba(0,0,0,.35)]"
-                    onClick={(e) => e.stopPropagation()}
-                >
-                    <div className="flex items-center justify-between border-b border-om-line2 px-[18px] py-4">
-                        <div>
-                            <div className="text-[15px] font-semibold text-om-ink">{title}</div>
-                            {subtitle != null && (
-                                <div className="mt-[3px] font-mono text-[9.5px] uppercase tracking-[0.08em] text-om-faint">{subtitle}</div>
-                            )}
-                        </div>
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            className="cursor-pointer text-[18px] leading-none text-om-faint hover:text-om-muted"
-                        >
-                            ×
-                        </button>
-                    </div>
-                    {children}
-                </div>
-            </div>
-        </div>
-    );
+function preflightBlockMessage(result) {
+    if (result.reason === 'merged_source') {
+        return __('This order is merged. Run the shared job :job (:count orders: :orders).', {
+            job: result.targetJob || '—',
+            count: result.nOrders ?? 0,
+            orders: (result.orders ?? []).map((order) => order.order_no).join(', '),
+        });
+    }
+
+    if (result.reason === 'rebuilding') {
+        return result.message || __('The queue is rebuilding nesting for this order. Try again shortly.');
+    }
+
+    return result.message || __('Start is blocked by the queue preflight.');
 }
 
 const modalFooterCls = 'flex justify-end gap-[9px] border-t border-om-line2 bg-om-panel px-[18px] py-[14px]';
@@ -646,6 +636,7 @@ function ProductionControls({ batch }) {
     const [showQc, setShowQc] = useState(false);
     const [showChecklist, setShowChecklist] = useState(false);
     const [showRelease, setShowRelease] = useState(false);
+    const page = usePage();
 
     const qcCount = (batch.quality_checks ?? []).length;
     const hasChecklist = !!batch.packaging_checklist;
@@ -716,7 +707,7 @@ function ProductionControls({ batch }) {
             )}
 
             {/* Series Report after release (admin-only route: admin/batches/{id}/report) */}
-            {isReleased && usePage().props.auth?.user?.roles?.includes('Admin') && (
+            {isReleased && page.props.auth?.user?.roles?.includes('Admin') && (
                 <a
                     href={`/admin/batches/${batch.id}/report`}
                     target="_blank"
@@ -734,7 +725,7 @@ function ProductionControls({ batch }) {
 // Single Batch card
 // ---------------------------------------------------------------------------
 
-function BatchCard({ batch, defaultOpen, labelTemplates = [], stepPhotos = {}, stepMedia = {}, stepChecklists = {}, stepOutputs = {}, flowMode = 'whole_batch', selectedWorkstation = null }) {
+function BatchCard({ batch, defaultOpen, labelTemplates = [], stepPhotos = {}, stepMedia = {}, stepChecklists = {}, stepOutputs = {}, flowMode = 'whole_batch', selectedWorkstation = null, machineCommandCaps = {} }) {
     const [expanded, setExpanded] = useState(defaultOpen);
     const showControls = batch.status === 'IN_PROGRESS' || batch.status === 'DONE';
 
@@ -804,7 +795,7 @@ function BatchCard({ batch, defaultOpen, labelTemplates = [], stepPhotos = {}, s
                     </div>
 
                     {/* Steps */}
-                    <BatchStepList steps={batch.steps ?? []} labelTemplates={labelTemplates} stepPhotos={stepPhotos} stepMedia={stepMedia} stepChecklists={stepChecklists} stepOutputs={stepOutputs} flowMode={flowMode} selectedWorkstation={selectedWorkstation} />
+                    <BatchStepList steps={batch.steps ?? []} labelTemplates={labelTemplates} stepPhotos={stepPhotos} stepMedia={stepMedia} stepChecklists={stepChecklists} stepOutputs={stepOutputs} flowMode={flowMode} selectedWorkstation={selectedWorkstation} machineCommandCaps={machineCommandCaps} />
 
                     {/* Production controls */}
                     {showControls && <ProductionControls batch={batch} />}
@@ -901,8 +892,9 @@ function QuantityLogForm({ step, throughStation = false, inflight, error, onSubm
     );
 }
 
-function BatchStepList({ steps, labelTemplates = [], stepPhotos = {}, stepMedia = {}, stepChecklists = {}, stepOutputs = {}, flowMode = 'whole_batch', selectedWorkstation = null }) {
+function BatchStepList({ steps, labelTemplates = [], stepPhotos = {}, stepMedia = {}, stepChecklists = {}, stepOutputs = {}, flowMode = 'whole_batch', selectedWorkstation = null, machineCommandCaps = {} }) {
     const [inflightStepId, setInflightStepId] = useState(null);
+    const startGuardRef = useRef(false);
     const transfer = flowMode === 'transfer';
 
     // Station scoping: with a station selected in the queue, its own steps stay
@@ -950,24 +942,10 @@ function BatchStepList({ steps, labelTemplates = [], stepPhotos = {}, stepMedia 
         });
     };
     const [photoZoom, setPhotoZoom] = useState(null);
-    const [pickModal, setPickModal] = useState(null); // { step, materials } | null
+    const [pickModal, setPickModal] = useState(null); // { step, materials, confirmSharedSheet } | null
+    const [sharedSheetConfirm, setSharedSheetConfirm] = useState(null); // { step, preflight } | null
+    const [preflightWarning, setPreflightWarning] = useState(null);
     const [completeModal, setCompleteModal] = useState(null); // { step } — actual-times confirmation (#52)
-
-    // An order with no steps used to render as nothing at all, which reads as a
-    // broken screen rather than as the consequence it is: a work order keeps the
-    // configuration it was created with, so steps added to the template later
-    // never reach an order that predates them. Say that, and say what to do
-    // about it — the operator cannot fix it from here, but whoever they ask can.
-    if (!steps || steps.length === 0) {
-        return (
-            <div className="rounded-om border border-om-line2 bg-om-panel px-4 py-3">
-                <p className="font-medium text-om-ink text-[13px]">{__('No production steps on this order')}</p>
-                <p className="mt-1 text-sm text-om-muted">
-                    {__('A work order keeps the process configuration it was created with, so steps added to the template afterwards do not appear here. Ask a supervisor to apply a change request to this order, or to raise a new one.')}
-                </p>
-            </div>
-        );
-    }
 
     const handleStepAction = (step, action) => {
         setInflightStepId(step.id);
@@ -1014,6 +992,22 @@ function BatchStepList({ steps, labelTemplates = [], stepPhotos = {}, stepMedia 
         );
     };
 
+    // An order with no steps used to render as nothing at all, which reads as a
+    // broken screen rather than as the consequence it is: a work order keeps the
+    // configuration it was created with, so steps added to the template later
+    // never reach an order that predates them. Say that, and say what to do
+    // about it — the operator cannot fix it from here, but whoever they ask can.
+    if (!steps || steps.length === 0) {
+        return (
+            <div className="rounded-om border border-om-line2 bg-om-panel px-4 py-3">
+                <p className="font-medium text-om-ink text-[13px]">{__('No production steps on this order')}</p>
+                <p className="mt-1 text-sm text-om-muted">
+                    {__('A work order keeps the process configuration it was created with, so steps added to the template afterwards do not appear here. Ask a supervisor to apply a change request to this order, or to raise a new one.')}
+                </p>
+            </div>
+        );
+    }
+
     // Record a typed output value (scalar or a picture file). forceFormData carries
     // the File for a picture; scalars post a plain value.
     const handleRecordOutput = (step, output, value) => {
@@ -1025,11 +1019,25 @@ function BatchStepList({ steps, labelTemplates = [], stepPhotos = {}, stepMedia 
         );
     };
 
-    // Starting a step: first ask the server which material lots (if any) need
-    // picking. With lots to pick, open the WO-time picking modal seeded with the
-    // system's proposal; otherwise start the step directly (unchanged behavior).
-    const handleStart = async (step) => {
-        setStartErrors({});
+    // Ask the queue runtime whether this step may start. A transport/HTTP/JSON
+    // failure degrades to `null`, which the shared mapper treats as warn+start
+    // (option B): the operator is never blocked by an unreachable preflight.
+    const fetchPreflight = async (step) => {
+        try {
+            const res = await fetch(`/operator/batch-step/${step.id}/start-preflight`, {
+                headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                credentials: 'same-origin',
+            });
+            if (!res.ok) return null;
+            return await res.json();
+        } catch {
+            return null;
+        }
+    };
+
+    // Existing start flow: ask which material lots need picking; with lots to
+    // pick open the WO-time picking modal, otherwise start directly.
+    const continueStart = async (step, confirmSharedSheet = false, onFinished = null) => {
         setInflightStepId(step.id);
         try {
             const res = await fetch(`/operator/batch-step/${step.id}/pick-preview`, {
@@ -1040,7 +1048,8 @@ function BatchStepList({ steps, labelTemplates = [], stepPhotos = {}, stepMedia 
                 const data = await res.json();
                 if (data.materials && data.materials.length > 0) {
                     setInflightStepId(null);
-                    setPickModal({ step, materials: data.materials });
+                    onFinished?.();
+                    setPickModal({ step, materials: data.materials, confirmSharedSheet });
                     return;
                 }
             }
@@ -1050,14 +1059,58 @@ function BatchStepList({ steps, labelTemplates = [], stepPhotos = {}, stepMedia 
         }
         router.post(
             `/operator/batch-step/${step.id}/start`,
-            {},
+            startPayload(confirmSharedSheet),
             {
                 preserveScroll: true,
-                onError: errors => setStartErrors({ [step.id]: Object.values(errors).join(' ') }),
-                onSuccess: page => { if (page.props.flash?.error) setStartErrors({ [step.id]: page.props.flash.error }); },
-                onFinish: () => setInflightStepId(null),
+                onError: errors => setStartErrors({ [step.id]: __(startErrorKey(Object.values(errors).join(' '))) }),
+                onSuccess: page => { if (page.props.flash?.error) setStartErrors({ [step.id]: __(startErrorKey(page.props.flash.error)) }); },
+                onFinish: () => { setInflightStepId(null); onFinished?.(); },
             }
         );
+    };
+
+    // Start a step only after the preflight says how: block rebuilding/merged
+    // source orders, confirm merged targets, warn on an unreadable preflight.
+    const handleStart = async (step) => {
+        setStartErrors({});
+        setPreflightWarning(null);
+        setInflightStepId(step.id);
+
+        const result = resolvePreflightAction(await fetchPreflight(step));
+
+        if (result.kind === PREFLIGHT_ACTIONS.BLOCK) {
+            setInflightStepId(null);
+            setStartErrors({ [step.id]: preflightBlockMessage(result) });
+            return;
+        }
+
+        if (result.kind === PREFLIGHT_ACTIONS.CONFIRM) {
+            setInflightStepId(null);
+            setSharedSheetConfirm({ step, preflight: result });
+            return;
+        }
+
+        if (result.kind === PREFLIGHT_ACTIONS.WARN_START) {
+            setPreflightWarning(__('Could not verify the shared sheet — starting without verification.'));
+        }
+
+        await continueStart(step, false);
+    };
+
+    const confirmSharedSheetStart = async () => {
+        if (startGuardRef.current) return;
+        startGuardRef.current = true;
+        const step = sharedSheetConfirm?.step;
+        setSharedSheetConfirm(null);
+        if (!step) {
+            startGuardRef.current = false;
+            return;
+        }
+        try {
+            await continueStart(step, true, () => { startGuardRef.current = false; });
+        } catch {
+            startGuardRef.current = false;
+        }
     };
 
     const renderStep = (step) => {
@@ -1181,6 +1234,10 @@ function BatchStepList({ steps, labelTemplates = [], stepPhotos = {}, stepMedia 
                                 templates={labelTemplates}
                                 label={__('Label')}
                             />
+
+                            {machineCommandCaps?.[step.id] && (
+                                <MachineCommandPanel stepId={step.id} caps={machineCommandCaps[step.id]} className="w-full" />
+                            )}
                         </div>
 
                         {transfer && step.status !== 'SKIPPED' && <StepLedger step={step} />}
@@ -1246,6 +1303,10 @@ function BatchStepList({ steps, labelTemplates = [], stepPhotos = {}, stepMedia 
 
     return (
         <div>
+            <PreflightWarningBanner
+                message={preflightWarning}
+                onDismiss={() => setPreflightWarning(null)}
+            />
             <div className="flex items-center justify-between mb-2">
                 <h4 className={`${sectionLabelCls} m-0`}>{__('Steps')}</h4>
                 {stationScoped && !focusStep && (
@@ -1323,10 +1384,19 @@ function BatchStepList({ steps, labelTemplates = [], stepPhotos = {}, stepMedia 
                 </div>
             )}
 
+            {sharedSheetConfirm && (
+                <SharedSheetConfirmModal
+                    preflight={sharedSheetConfirm.preflight}
+                    onConfirm={confirmSharedSheetStart}
+                    onCancel={() => setSharedSheetConfirm(null)}
+                />
+            )}
+
             {pickModal && (
                 <LotPickModal
                     step={pickModal.step}
                     materials={pickModal.materials}
+                    confirmSharedSheet={pickModal.confirmSharedSheet}
                     onClose={() => setPickModal(null)}
                 />
             )}
@@ -1685,7 +1755,7 @@ function OutputScalarInput({ output, initial, disabled, onSubmit }) {
 
 const EPSILON = 0.0001;
 
-function LotPickModal({ step, materials, onClose }) {
+function LotPickModal({ step, materials, confirmSharedSheet = false, onClose }) {
     const [submitting, setSubmitting] = useState(false);
     const [startError, setStartError] = useState('');
     // picks: { [materialId]: [{ material_lot_id, picked_qty: string }] }
@@ -1756,6 +1826,7 @@ function LotPickModal({ step, materials, onClose }) {
                     picked_qty: Number(ln.picked_qty),
                 })),
             })),
+            ...startPayload(confirmSharedSheet),
         };
         router.post(`/operator/batch-step/${step.id}/start`, payload, {
             preserveScroll: true,
@@ -2276,7 +2347,7 @@ function EngineeringDocsSection({ docs = [], onView }) {
 // ---------------------------------------------------------------------------
 
 export default function WorkOrderDetail() {
-    const { workOrder, issueTypes = [], scrapReasons = [], workstations = [], issueCustomFields = [], defaultWorkstationId, line, labelTemplates = [], processPhotos = [], stepPhotos = {}, stepMedia = {}, stepChecklists = {}, stepOutputs = {}, engineeringDocuments = [], materialShortages = [], flowMode = 'whole_batch', selectedWorkstation = null, serialUnits = { total: 0, units: [] }, hooks = {} } = usePage().props;
+    const { workOrder, issueTypes = [], scrapReasons = [], workstations = [], issueCustomFields = [], defaultWorkstationId, line, labelTemplates = [], processPhotos = [], stepPhotos = {}, stepMedia = {}, stepChecklists = {}, stepOutputs = {}, engineeringDocuments = [], materialShortages = [], flowMode = 'whole_batch', selectedWorkstation = null, serialUnits = { total: 0, units: [] }, hooks = {}, machineCommandCaps = {} } = usePage().props;
 
     const [engViewer, setEngViewer] = useState(null); // { url, title } for the sandboxed viewer
 
@@ -2500,6 +2571,7 @@ export default function WorkOrderDetail() {
                                             stepOutputs={stepOutputs}
                                             flowMode={flowMode}
                                             selectedWorkstation={selectedWorkstation}
+                                            machineCommandCaps={machineCommandCaps}
                                         />
                                     ))}
                                 </div>

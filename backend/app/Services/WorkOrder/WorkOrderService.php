@@ -204,7 +204,7 @@ class WorkOrderService
                 'unit_price' => $data['unit_price'] ?? null,
                 'produced_qty' => 0,
                 'counting_source' => $data['counting_source'] ?? WorkOrder::COUNTING_OPERATOR,
-                'status' => WorkOrder::STATUS_PENDING,
+                'status' => $data['status'] ?? WorkOrder::STATUS_PENDING,
                 'priority' => $data['priority'] ?? 0,
                 'due_date' => $data['due_date'] ?? null,
                 'planned_start_at' => $data['planned_start_at'] ?? null,
@@ -861,6 +861,10 @@ class WorkOrderService
 
         if (isset($filters['line_id'])) {
             $query->forLine($filters['line_id']);
+        }
+
+        if (isset($filters['customer_order_no'])) {
+            $query->where('customer_order_no', $filters['customer_order_no']);
         }
 
         // Default ordering

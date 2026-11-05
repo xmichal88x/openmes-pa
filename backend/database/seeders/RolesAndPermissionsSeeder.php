@@ -20,8 +20,22 @@ class RolesAndPermissionsSeeder extends Seeder
             // can let a planner raise a change while only a reviewer approves it.
             'approve work order changes',
 
+            // Packaging (#R07) — deliberately narrow. 'manage packing work orders'
+            // replaces the generic create/edit grants for the PACKING line only;
+            // 'dispatch packing' is the operator action on cartons and dispatches;
+            // 'process packing dispatch' belongs to the PA bridge account.
+            'dispatch packing', 'manage packing work orders', 'process packing dispatch',
+
+            // Machine commands (P1b) — requesting an intent is separate from
+            // processing the outbox. Only the machine bridge may process.
+            'request machine load', 'request machine labels', 'request machine manual m30',
+            'process machine commands',
+
             // Batch & Steps
+            'create batches',
             'start batch step', 'complete batch step', 'skip batch step',
+            // System-level start of a shared-sheet source (machine gateway only).
+            'start system fanout',
 
             // Issues
             'view issues', 'create issues', 'assign issues', 'resolve issues', 'close issues',
@@ -117,7 +131,11 @@ class RolesAndPermissionsSeeder extends Seeder
             // supervisors do not hold. An admin can grant more through
             // Settings → Access if a particular plant wants it.
             'tab:orders',
+            'create batches',
             'start batch step', 'complete batch step',
+            // Supervisors release cartons too and may manage PACK work orders,
+            // but never process the PA outbox.
+            'dispatch packing', 'manage packing work orders',
             'view issues', 'create issues', 'assign issues', 'resolve issues', 'close issues',
             'view lines', 'view products', 'view process templates',
             'view engineering documents', 'manage engineering documents',
@@ -135,6 +153,9 @@ class RolesAndPermissionsSeeder extends Seeder
             'view cost sources',
             // Gate 7
             'view tools', 'view maintenance events',
+            // Supervisors may request every machine command, including the
+            // destructive manual M30.
+            'request machine load', 'request machine labels', 'request machine manual m30',
         ]));
 
         // Operator — minimal: view queue + execute steps + report issues
@@ -145,6 +166,42 @@ class RolesAndPermissionsSeeder extends Seeder
             'view issues', 'create issues',
             // Operators must be able to view/download engineering docs at the station.
             'view engineering documents',
+            // Operators may load NC and generate labels, never trigger M30.
+            'request machine load', 'request machine labels',
+        ]));
+
+        // PackingWorker — the human packing station. Sees work orders, creates
+        // cartons and dispatches them; the PACKING line scope is enforced by the
+        // policy/trait, not by the role name.
+        $packingWorkerRole = Role::firstOrCreate(['name' => 'PackingWorker', 'guard_name' => 'web']);
+        $packingWorkerRole->syncPermissions(array_merge($keepTabs($packingWorkerRole), [
+            'view work orders',
+            'dispatch packing',
+        ]));
+
+        // PackingBridge — the machine account used by Production Automation to
+        // create PACK work orders, push expected codes, complete them and process
+        // the dispatch outbox. No CNC create/edit rights.
+        $packingBridgeRole = Role::firstOrCreate(['name' => 'PackingBridge', 'guard_name' => 'web']);
+        $packingBridgeRole->syncPermissions(array_merge($keepTabs($packingBridgeRole), [
+            'view work orders',
+            'manage packing work orders',
+            'process packing dispatch',
+        ]));
+
+        // MachineBridge — the machine gateway account (RQ-189). Least privilege:
+        // it reads work orders/connections and drives the batch step lifecycle
+        // for its own line so it can open a batch and report machine completion.
+        // Batch creation (RQ-190) is scoped to that line by the policy, so the
+        // bridge no longer needs the broad 'create work orders' grant.
+        // It may not request machine commands (that is the human operator
+        // action) and holds no edit/delete work order grants.
+        $machineBridgeRole = Role::firstOrCreate(['name' => 'MachineBridge', 'guard_name' => 'web']);
+        $machineBridgeRole->syncPermissions(array_merge($keepTabs($machineBridgeRole), [
+            'view work orders', 'create batches',
+            'start batch step', 'start system fanout', 'complete batch step',
+            'process machine commands',
+            'view lines', 'view workstation types',
         ]));
     }
 }

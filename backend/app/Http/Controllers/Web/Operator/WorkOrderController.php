@@ -5,15 +5,18 @@ namespace App\Http\Controllers\Web\Operator;
 use App\Http\Controllers\Controller;
 use App\Models\IssueType;
 use App\Models\LineStatus;
+use App\Models\MachineCommand;
 use App\Models\ScrapReason;
 use App\Models\TemplateStepChecklistItem;
 use App\Models\TemplateStepMedia;
 use App\Models\WorkOrder;
 use App\Models\Workstation;
+use App\Services\Machine\MachineCommandService;
 use App\Services\Production\OperatorWorkstationSelection;
 use App\Services\WorkOrder\WorkOrderService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Inertia\Inertia;
 
 class WorkOrderController extends Controller
@@ -224,6 +227,7 @@ class WorkOrderController extends Controller
             'line',
             'productType',
             'batches.steps.workstation.line',
+            'batches.steps.workstation.workstationType',
             'batches.steps.startedBy',
             'batches.steps.completedBy',
             'batches.steps.confirmedBy',
@@ -240,6 +244,42 @@ class WorkOrderController extends Controller
             'scrapEntries.scrapReason',
             'scrapEntries.reportedBy',
         ]);
+
+        // Machine-command capabilities per step. The active commands are read
+        // once for the whole order, restricted to the types this user may see,
+        // and the actor's line access is resolved once for every step.
+        $steps = $workOrder->batches->flatMap(fn ($batch) => $batch->steps);
+
+        $policy = Gate::getPolicyFor(MachineCommand::class);
+        $visibleTypes = $policy === null ? [] : $policy->visibleTypes($request->user());
+
+        $activeCommands = $visibleTypes === []
+            ? collect()
+            : MachineCommand::query()
+                ->whereIn('batch_step_id', $steps->pluck('id')->all())
+                ->whereIn('status', MachineCommand::ACTIVE_STATUSES)
+                ->when($visibleTypes !== null, fn ($query) => $query->whereIn('type', $visibleTypes))
+                ->orderByDesc('id')
+                ->get()
+                ->unique('batch_step_id')
+                ->keyBy('batch_step_id');
+
+        $machineCommandService = app(MachineCommandService::class);
+        $allowedLineIds = $request->user()->hasAnyRole(['Admin', 'Supervisor'])
+            ? null
+            : $request->user()->lines()->pluck('lines.id')->map(fn ($id) => (int) $id)->all();
+        $machineCommandCaps = [];
+
+        foreach ($steps as $step) {
+            $machineCommandCaps[$step->id] = $machineCommandService->capabilitiesFor(
+                $request->user(),
+                $step,
+                $activeCommands->get($step->id),
+                $workOrder,
+                $allowedLineIds,
+                true,
+            );
+        }
 
         $issueTypes = IssueType::where('is_active', true)->orderBy('name')->get();
 
@@ -417,7 +457,7 @@ class WorkOrderController extends Controller
         // was last seen - so the order shows which pieces it is made of, not only counts.
         $serialUnits = $this->serialUnitsOf($workOrder);
 
-        return Inertia::render('operator/WorkOrderDetail', compact('hooks', 'workOrder', 'issueTypes', 'scrapReasons', 'workstations', 'defaultWorkstationId', 'line', 'labelTemplates', 'processPhotos', 'stepPhotos', 'stepMedia', 'stepChecklists', 'stepOutputs', 'issueCustomFields', 'engineeringDocuments', 'materialShortages', 'flowMode', 'selectedWorkstation', 'serialUnits'));
+        return Inertia::render('operator/WorkOrderDetail', compact('hooks', 'workOrder', 'issueTypes', 'scrapReasons', 'workstations', 'defaultWorkstationId', 'line', 'labelTemplates', 'processPhotos', 'stepPhotos', 'stepMedia', 'stepChecklists', 'stepOutputs', 'issueCustomFields', 'engineeringDocuments', 'materialShortages', 'flowMode', 'selectedWorkstation', 'serialUnits', 'machineCommandCaps'));
     }
 
     /**

@@ -399,22 +399,6 @@ function DeploymentsTab({ entries, missing }) {
         router.get('/admin/logs/system', { tab: 'deployments', page }, { preserveState: false });
     };
 
-    if (missing) {
-        return (
-            <div className="rounded-om-sm border border-om-line bg-om-chip text-om-ink p-5">
-                <p className="font-medium">Deployment audit log is not available on this build.</p>
-                <p className="text-sm mt-1">
-                    Deployments log requires v0.12+ schema (system_updates table). This table was introduced by the
-                    updater hardening work and has not been merged into this branch yet.
-                </p>
-                <p className="text-xs mt-2 text-om-accent">
-                    Once the system_updates migration lands, this tab will surface start/end timestamps, the upgraded
-                    version, success/failure status, and any error output from each deployment.
-                </p>
-            </div>
-        );
-    }
-
     const columns = useMemo(() => [
         {
             id: 'started_at',
@@ -472,6 +456,22 @@ function DeploymentsTab({ entries, missing }) {
             cell: ({ row }) => <DeploymentOutputCell row={row.original} />,
         },
     ], []);
+
+    if (missing) {
+        return (
+            <div className="rounded-om-sm border border-om-line bg-om-chip text-om-ink p-5">
+                <p className="font-medium">Deployment audit log is not available on this build.</p>
+                <p className="text-sm mt-1">
+                    Deployments log requires v0.12+ schema (system_updates table). This table was introduced by the
+                    updater hardening work and has not been merged into this branch yet.
+                </p>
+                <p className="text-xs mt-2 text-om-accent">
+                    Once the system_updates migration lands, this tab will surface start/end timestamps, the upgraded
+                    version, success/failure status, and any error output from each deployment.
+                </p>
+            </div>
+        );
+    }
 
     return (
         <div>

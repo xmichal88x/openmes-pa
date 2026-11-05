@@ -43,6 +43,10 @@ class LabelTemplatesSeeder extends Seeder
                 'name' => 'Standard Material Lot (IQC)',
                 'size' => '100x50',
             ],
+            LabelTemplate::TYPE_BOX => [
+                'name' => 'Standard Packing Box',
+                'size' => '100x50',
+            ],
         ];
 
         $tenants = Tenant::query()->get();

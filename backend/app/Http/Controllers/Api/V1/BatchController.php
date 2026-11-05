@@ -61,7 +61,7 @@ class BatchController extends Controller
      */
     public function store(Request $request, WorkOrder $workOrder): JsonResponse
     {
-        $this->authorize('create', WorkOrder::class);
+        $this->authorize('createBatch', $workOrder);
 
         $validated = $request->validate([
             'target_qty' => 'required|numeric|min:0.01',

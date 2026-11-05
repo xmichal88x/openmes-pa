@@ -23,6 +23,10 @@ Schedule::command('oee:calculate')->dailyAt('01:00');
 Schedule::command('maintenance:generate-events')->hourly();
 Schedule::command('quality:fire-due-triggers')->everyMinute()->withoutOverlapping();
 Schedule::command('quality:notify-overdue-actions')->dailyAt('07:00');
+// Reclaim machine-command leases whose worker went away. Without this a
+// crashed gateway leaves rows `processing` until the next claim on that
+// workstation; the lease expiry is the safety net for the outbox.
+Schedule::command('machine-commands:expire')->everyMinute()->withoutOverlapping();
 // Keep time-based priority rules (hours-until-due) fresh as due dates approach.
 Schedule::command('priority:recalculate')->hourly()->withoutOverlapping();
 // Uploads the importer abandoned (previewed but never run, validated and left).

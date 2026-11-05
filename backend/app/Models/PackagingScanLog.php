@@ -13,6 +13,7 @@ class PackagingScanLog extends Model
         'user_id',
         'work_order_id',
         'pallet_id',
+        'packaging_box_id',
         'ean',
         'product_name',
         'scanned_at',
@@ -35,5 +36,10 @@ class PackagingScanLog extends Model
     public function pallet(): BelongsTo
     {
         return $this->belongsTo(Pallet::class);
+    }
+
+    public function packagingBox(): BelongsTo
+    {
+        return $this->belongsTo(PackagingBox::class, 'packaging_box_id');
     }
 }

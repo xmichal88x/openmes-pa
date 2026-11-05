@@ -1,0 +1,11 @@
+{
+    "name": "PlPackagingExtras",
+    "display_name": "PL Packaging Extras (P1)",
+    "version": "1.0.0",
+    "description": "P1 EAN packaging API: expected codes, atomic PACK work orders, scan guards and PL labels. Requires core P1 scan write-path.",
+    "author": "production-automation",
+    "provider": "Modules\\PlPackagingExtras\\Providers\\PlPackagingExtrasServiceProvider",
+    "requires_core": ">=0.27.0",
+    "hooks": [],
+    "requires": []
+}

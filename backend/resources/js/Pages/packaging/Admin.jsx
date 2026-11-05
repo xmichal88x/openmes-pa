@@ -108,7 +108,7 @@ export default function Admin() {
     return (
         <>
             <Head title={__('Packaging — Overview')} />
-            <div className="max-w-7xl mx-auto">
+            <div className="w-full px-4 py-5 sm:px-6 sm:py-6">
                 {/* Breadcrumbs */}
                 <PageTrail />
 

@@ -25,11 +25,19 @@ class Pallet extends Model
 
     public const QUALITY_STATUSES = [self::QUALITY_PENDING, self::QUALITY_PASS, self::QUALITY_FAIL];
 
+    /** Two disjoint pallet modes (R07-15): parts straight on the pallet or cartons only. */
+    public const KIND_LOOSE = 'loose'; // parts scanned directly (legacy behaviour)
+
+    public const KIND_BOXES = 'boxes'; // closed packaging boxes only
+
+    public const KINDS = [self::KIND_LOOSE, self::KIND_BOXES];
+
     protected $fillable = [
         'pallet_no',
         'work_order_id',
         'batch_id',
         'qty',
+        'kind',
         'status',
         'quality_status',
         'location',
@@ -46,6 +54,7 @@ class Pallet extends Model
     {
         return [
             'activated_at' => 'datetime',
+            'kind' => 'string',
             'status' => PalletStatus::class,
             'qty' => 'integer',
             'shipped_at' => 'datetime',
@@ -101,19 +110,28 @@ class Pallet extends Model
      */
     public function recomputeQualityStatus(): void
     {
-        $checks = $this->qualityChecks()->get(['all_passed']);
-        $units = $this->unitVerdicts();
+        $decision = $this->qualityDecisions()
+            ->orderByDesc('decided_at')
+            ->orderByDesc('id')
+            ->first();
 
-        // Serialised goods are tested one by one: the pallet is as good as its
-        // worst unit. A pallet-level check (a failed one) still overrides.
-        $status = match (true) {
-            $checks->contains(fn ($c) => ! $c->all_passed) => self::QUALITY_FAIL,
-            $units !== null && in_array(self::QUALITY_FAIL, $units, true) => self::QUALITY_FAIL,
-            $units !== null && in_array(self::QUALITY_PENDING, $units, true) => self::QUALITY_PENDING,
-            $units !== null => self::QUALITY_PASS,
-            $checks->isEmpty() => self::QUALITY_PENDING,
-            default => self::QUALITY_PASS,
-        };
+        if ($decision !== null) {
+            $status = $decision->status;
+        } else {
+            $checks = $this->qualityChecks()->get(['all_passed']);
+            $units = $this->unitVerdicts();
+
+            // Serialised goods are tested one by one: the pallet is as good as
+            // its worst unit. A pallet-level check (a failed one) still overrides.
+            $status = match (true) {
+                $checks->contains(fn ($c) => ! $c->all_passed) => self::QUALITY_FAIL,
+                $units !== null && in_array(self::QUALITY_FAIL, $units, true) => self::QUALITY_FAIL,
+                $units !== null && in_array(self::QUALITY_PENDING, $units, true) => self::QUALITY_PENDING,
+                $units !== null => self::QUALITY_PASS,
+                $checks->isEmpty() => self::QUALITY_PENDING,
+                default => self::QUALITY_PASS,
+            };
+        }
 
         if ($this->quality_status !== $status) {
             $this->quality_status = $status;
@@ -198,6 +216,11 @@ class Pallet extends Model
         return $this->hasMany(QualityCheck::class);
     }
 
+    public function qualityDecisions(): HasMany
+    {
+        return $this->hasMany(PalletQualityDecision::class);
+    }
+
     /**
      * Stock movements booked against this pallet - the milestone backflush
      * consumption declared when the pallet was created. Linked via the
@@ -214,6 +237,17 @@ class Pallet extends Model
     public function cartons(): HasMany
     {
         return $this->hasMany(UnitCarton::class);
+    }
+
+    /** Packaging boxes loaded on this pallet (only meaningful in boxes mode). */
+    public function boxes(): HasMany
+    {
+        return $this->hasMany(PackagingBox::class);
+    }
+
+    public function isBoxesMode(): bool
+    {
+        return $this->kind === self::KIND_BOXES;
     }
 
     public function units(): HasMany

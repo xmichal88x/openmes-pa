@@ -1,4 +1,4 @@
-FROM php:8.3.36-fpm-alpine
+FROM php:8.3-fpm-alpine
 
 # Install system dependencies
 RUN apk add --no-cache \
@@ -107,7 +107,7 @@ COPY --from=ghcr.io/roadrunner-server/roadrunner:2025.1.14 /usr/bin/rr /var/www/
 RUN chmod +x /var/www/html/rr
 
 # Install Node dependencies and build assets
-RUN npm ci && npm run build
+RUN npm ci && npm run lint && npm test && npm run build
 
 # Clean up node_modules + the build-only workspace sources to reduce image size
 RUN rm -rf node_modules /var/www/packages
