@@ -182,10 +182,9 @@ export function formatDateTime(value, opts = { day: '2-digit', month: '2-digit',
  * yesterday for the first hours of every day east of Greenwich.
  */
 export function todayInPlant(now = new Date()) {
-    // 'en-CA' is a fixed format tag (it yields YYYY-MM-DD), not the UI locale.
-    return new Intl.DateTimeFormat('en-CA', {
-        timeZone: activeTimezone, year: 'numeric', month: '2-digit', day: '2-digit',
-    }).format(now);
+    // Reuse the formatToParts implementation: 'en-CA' emits YYYY-MM-DD only
+    // when the runtime ships full ICU (Alpine's Node does not).
+    return todayInTimezone(now, activeTimezone);
 }
 
 export function formatNumber(value, opts = {}) {
