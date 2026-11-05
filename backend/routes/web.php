@@ -45,8 +45,8 @@ use App\Http\Controllers\Web\Admin\WorkstationTypeController;
 use App\Http\Controllers\Web\AuthController;
 use App\Http\Controllers\Web\IssueManagementController;
 use App\Http\Controllers\Web\Logistics\PalletMovementController;
+use App\Http\Controllers\Web\Machine\MachineCommandController as OperatorMachineCommandController;
 use App\Http\Controllers\Web\Operator\BatchController as OperatorBatchController;
-use App\Http\Controllers\Web\Operator\InspectionController as OperatorInspectionController;
 use App\Http\Controllers\Web\Operator\IssueController as OperatorIssueController;
 // Gate 7 — Maintenance
 use App\Http\Controllers\Web\Operator\LineController as OperatorLineController;
@@ -57,9 +57,14 @@ use App\Http\Controllers\Web\Operator\WorkOrderController as OperatorWorkOrderCo
 use App\Http\Controllers\Web\Operator\WorkstationController as OperatorWorkstationController;
 use App\Http\Controllers\Web\Packaging\LabelPrintController;
 use App\Http\Controllers\Web\Packaging\LabelTemplateController;
+use App\Http\Controllers\Web\Packaging\PackagingBoxController;
+use App\Http\Controllers\Web\Packaging\PackagingBoxLabelController;
 use App\Http\Controllers\Web\Packaging\PackagingController;
+use App\Http\Controllers\Web\Packaging\PackagingDispatchController;
 use App\Http\Controllers\Web\Packaging\PackagingEanController;
+use App\Http\Controllers\Web\Packaging\PalletQualityController;
 use App\Http\Controllers\Web\Packaging\UnitCartonController;
+use App\Http\Controllers\Web\Packaging\WorkOrderPackingListController;
 use App\Http\Controllers\Web\QualityControlTaskController;
 use App\Http\Controllers\Web\RegisterController;
 use App\Http\Controllers\Web\Supervisor\DashboardController as SupervisorDashboardController;
@@ -173,10 +178,6 @@ Route::middleware('auth')->group(function () {
     // Logout
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 
-    // Administrator's view switcher: look at the interface as a supervisor or an
-    // operator sees it. Presentation only; SwitchViewRequest admits Admins only.
-    Route::post('/view-as', [\App\Http\Controllers\Web\ViewAsController::class, 'store'])->name('view-as');
-
     // SPA live-sync snapshot — initial rows for a Reverb-synced collection (live
     // deltas then arrive on the channel). Served in the *web* group so it
     // authenticates via the plain session cookie, exactly like every Inertia
@@ -217,9 +218,6 @@ Route::middleware('auth')->group(function () {
         // Admin-only system settings
         Route::get('/system', [\App\Http\Controllers\Web\SettingsController::class, 'showSystemSettings'])->name('system')->middleware('role:Admin');
         Route::post('/system', [\App\Http\Controllers\Web\SettingsController::class, 'updateSystemSettings'])->name('update-system')->middleware('role:Admin');
-        // Admin-only quality targets (scrap rate, first-pass yield) — own route so
-        // saving them never posts, or is blocked by, the rest of the system form.
-        Route::post('/production-targets', [\App\Http\Controllers\Web\SettingsController::class, 'updateProductionTargets'])->name('update-production-targets')->middleware('role:Admin');
         // Telemetry: the admin can read the exact report before deciding, and
         // can make a cloned installation a stranger again.
         Route::get('/telemetry/preview', [\App\Http\Controllers\Web\SettingsController::class, 'previewTelemetry'])->name('telemetry.preview')->middleware('role:Admin');
@@ -287,6 +285,7 @@ Route::middleware('auth')->group(function () {
         // Batch step progression (replaces the old Livewire BatchStepList — see
         // OperatorBatchController::startStep/completeStep delegating to BatchService).
         Route::get('/batch-step/{batchStep}/pick-preview', [OperatorBatchController::class, 'pickPreview'])->name('batch-step.pick-preview');
+        Route::get('/batch-step/{batchStep}/start-preflight', [OperatorBatchController::class, 'startPreflight'])->name('batch-step.start-preflight');
         Route::post('/batch-step/{batchStep}/start', [OperatorBatchController::class, 'startStep'])->name('batch-step.start');
         Route::post('/batch-step/{batchStep}/complete', [OperatorBatchController::class, 'completeStep'])->name('batch-step.complete');
         // Quantity ledger: log good / scrapped pieces leaving a running step
@@ -297,6 +296,13 @@ Route::middleware('auth')->group(function () {
         Route::post('/batch-step/{batchStep}/choose-variant', [OperatorBatchController::class, 'chooseVariant'])->name('batch-step.choose-variant');
         // Read-confirmation: acknowledge reading a critical step's instructions.
         Route::post('/batch-step/{batchStep}/confirm-instructions', [OperatorBatchController::class, 'confirmInstructions'])->name('batch-step.confirm-instructions');
+
+        // Machine command outbox (P1b): request intents for this step and poll
+        // them; cancel own pending intents.
+        Route::get('/batch-step/{batchStep}/machine-commands', [OperatorMachineCommandController::class, 'index'])->name('batch-step.machine-commands.index');
+        Route::post('/batch-step/{batchStep}/machine-commands', [OperatorMachineCommandController::class, 'store'])->name('batch-step.machine-commands.store');
+        Route::get('/machine-commands/{machineCommand}', [OperatorMachineCommandController::class, 'show'])->name('machine-commands.show');
+        Route::post('/machine-commands/{machineCommand}/cancel', [OperatorMachineCommandController::class, 'cancel'])->name('machine-commands.cancel');
         // Document control: validate a mandatory document so its step can complete.
         Route::post('/batch-step-document/{batchStepDocument}/validate', [OperatorBatchController::class, 'validateDocument'])->name('batch-step-document.validate');
         // Stream a step document's uploaded file (operators read it before validating).
@@ -341,19 +347,6 @@ Route::middleware('auth')->group(function () {
         // Production quantity corrections
         Route::get('/shift-entry/{shiftEntry}/correct', [ProductionCorrectionController::class, 'edit'])->name('shift-entry.correct');
         Route::put('/shift-entry/{shiftEntry}/correct', [ProductionCorrectionController::class, 'update'])->name('shift-entry.correct.update');
-    });
-
-    // Inbound inspections on the operator tablet — for holders of the "Quality
-    // inspector" / "Quality disposition" permissions, whatever their role. No
-    // role gate here: InspectionPolicy alone authorises every action, the
-    // same policy as /api/v1/inspections, so the two let in the same people.
-    Route::prefix('operator')->name('operator.')->group(function () {
-        Route::get('/inspections', [OperatorInspectionController::class, 'index'])->name('inspections.index');
-        Route::post('/inspections', [OperatorInspectionController::class, 'store'])->name('inspections.store');
-        Route::get('/inspections/{inspection}', [OperatorInspectionController::class, 'show'])->name('inspections.show')->whereNumber('inspection');
-        Route::patch('/inspections/{inspection}/results/{result}', [OperatorInspectionController::class, 'recordResult'])->name('inspections.results.update')->whereNumber(['inspection', 'result']);
-        Route::post('/inspections/{inspection}/complete', [OperatorInspectionController::class, 'complete'])->name('inspections.complete')->whereNumber('inspection');
-        Route::post('/inspections/{inspection}/disposition', [OperatorInspectionController::class, 'disposition'])->name('inspections.disposition')->whereNumber('inspection');
     });
 
     // Supervisor routes (Supervisor and Admin)
@@ -428,7 +421,6 @@ Route::middleware('auth')->group(function () {
         // optional `quality` module ("Issues & reasons").
         Route::middleware('module:quality')->group(function () {
             Route::get('/issues', [IssueManagementController::class, 'index'])->name('issues.index');
-            Route::post('/issues', [IssueManagementController::class, 'store'])->name('issues.store');
             // Bulk acknowledge / resolve — the alerts page acts on a whole list.
             Route::post('/issues/bulk', [IssueManagementController::class, 'bulk'])->name('issues.bulk');
             Route::post('/issues/{issue}/acknowledge', [IssueManagementController::class, 'acknowledge'])->name('issues.acknowledge');
@@ -615,7 +607,6 @@ Route::middleware('auth')->group(function () {
 
         // Issues Management
         Route::get('/issues', [IssueManagementController::class, 'index'])->name('issues.index');
-        Route::post('/issues', [IssueManagementController::class, 'store'])->name('issues.store');
         // Bulk acknowledge / resolve — the alerts page acts on a whole list.
         Route::post('/issues/bulk', [IssueManagementController::class, 'bulk'])->name('issues.bulk');
         Route::post('/issues/{issue}/acknowledge', [IssueManagementController::class, 'acknowledge'])->name('issues.acknowledge');
@@ -640,7 +631,6 @@ Route::middleware('auth')->group(function () {
 
         // User Management
         Route::resource('users', \App\Http\Controllers\Web\Admin\UserManagementController::class);
-        Route::delete('/users/{user}/worker', [\App\Http\Controllers\Web\Admin\UserManagementController::class, 'unlinkWorker'])->name('users.worker.unlink');
 
         // Production Lines Management
         Route::resource('lines', \App\Http\Controllers\Web\Admin\LineManagementController::class);
@@ -990,7 +980,7 @@ Route::middleware('auth')->group(function () {
 
     // ── Packaging ───────────────────────────────────────────────────────────
     Route::name('packaging.')->prefix('packaging')->group(function () {
-        Route::middleware('role:Operator|Supervisor|Admin')->group(function () {
+        Route::middleware('role:Operator|Supervisor|Admin|PackingWorker')->group(function () {
             Route::get('/station', [PackagingController::class, 'station'])->name('station');
             Route::post('/scan', [PackagingController::class, 'scan'])->name('scan');
             Route::post('/scan-unit', [PackagingController::class, 'scanUnit'])->name('scan-unit');
@@ -1003,6 +993,9 @@ Route::middleware('auth')->group(function () {
             Route::get('/stats', [PackagingController::class, 'stats'])->name('stats');
             Route::get('/pallets', [PackagingController::class, 'openPallets'])->name('pallets.open');
             Route::post('/pallets', [PackagingController::class, 'createPallet'])->name('pallets.create');
+            Route::post('/pallets/{pallet}/quality', [PalletQualityController::class, 'store'])
+                ->middleware('permission:dispatch packing')
+                ->name('pallets.quality');
             Route::post('/pallets/{pallet}/close', [PackagingController::class, 'closePallet'])->name('pallets.close');
             Route::post('/pallets/{pallet}/activate', [PackagingController::class, 'activatePallet'])->name('pallets.activate');
             Route::post('/pallets/{pallet}/release', [PackagingController::class, 'releasePallet'])->name('pallets.release');
@@ -1014,6 +1007,34 @@ Route::middleware('auth')->group(function () {
             Route::post('/cartons/{carton}/activate', [UnitCartonController::class, 'activate'])->name('cartons.activate');
             Route::post('/cartons/{carton}/release', [UnitCartonController::class, 'release'])->name('cartons.release');
             Route::post('/cartons/{carton}/pallet', [UnitCartonController::class, 'assignPallet'])->name('cartons.pallet');
+
+            // R07 cartons, boxes-mode pallets and dispatch (JSON, same contract as API).
+            Route::get('/boxes', [PackagingBoxController::class, 'index'])->name('boxes.index');
+            Route::post('/boxes', [PackagingBoxController::class, 'store'])->name('boxes.store');
+            Route::get('/boxes/{box}/label.pdf', [PackagingBoxLabelController::class, 'pdf'])->name('boxes.label.pdf');
+            Route::get('/boxes/{box}/label.zpl', [PackagingBoxLabelController::class, 'zpl'])->name('boxes.label.zpl');
+            Route::get('/boxes/{box}', [PackagingBoxController::class, 'show'])->name('boxes.show');
+            Route::post('/boxes/{box}/close', [PackagingBoxController::class, 'close'])->name('boxes.close');
+            Route::post('/boxes/{box}/reopen', [PackagingBoxController::class, 'reopen'])->name('boxes.reopen');
+            Route::post('/boxes/{box}/eans', [PackagingBoxController::class, 'assignCode'])->name('boxes.eans.store');
+            Route::post('/boxes/{box}/pallet', [PackagingBoxController::class, 'assignPallet'])->name('boxes.pallet.store');
+            Route::delete('/boxes/{box}/pallet', [PackagingBoxController::class, 'unassignPallet'])->name('boxes.pallet.destroy');
+            Route::delete('/boxes/{box}', [PackagingBoxController::class, 'destroy'])->name('boxes.destroy');
+
+            Route::get('/pallets/boxes', [PackagingBoxController::class, 'pallets'])->name('pallets.boxes');
+            Route::post('/pallets/boxes', [PackagingBoxController::class, 'storePallet'])->name('pallets.boxes.store');
+            Route::get('/pallets/{pallet}/packing-list.pdf', [\App\Http\Controllers\Web\Packaging\PackingListController::class, 'packaging'])->name('pallets.packing-list');
+
+            Route::get('/work-orders/{workOrder}/packing-list.pdf', [WorkOrderPackingListController::class, 'pdf'])->name('work-orders.packing-list.pdf');
+
+            Route::get('/dispatches', [PackagingDispatchController::class, 'index'])->name('dispatches.index');
+            Route::post('/dispatch', [PackagingDispatchController::class, 'store'])->name('dispatch.store');
+            Route::post('/dispatches/{dispatch}/cancel', [PackagingDispatchController::class, 'cancel'])->name('dispatches.cancel');
+            // Machine-only result path, mirrored from the API.
+            Route::middleware('permission:process packing dispatch')->group(function () {
+                Route::post('/dispatches/external-close', [PackagingDispatchController::class, 'externalClose'])->name('dispatches.external-close');
+                Route::patch('/dispatches/{dispatch}', [PackagingDispatchController::class, 'update'])->name('dispatches.update');
+            });
         });
 
         Route::middleware('role:Supervisor|Admin')->group(function () {

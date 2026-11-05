@@ -23,7 +23,7 @@ class StoreUserRequest extends FormRequest
             'account_type' => ['required', 'in:user,workstation'],
             'role' => ['required_if:account_type,user', 'nullable', Rule::in(['Operator', 'Supervisor', 'Admin'])],
             'workstation_id' => ['nullable', 'integer', 'exists:workstations,id', 'required_if:account_type,workstation'],
-            'worker_id' => ['nullable', 'integer', 'exists:workers,id', Rule::unique('users', 'worker_id')->whereNull('deleted_at')],
+            'worker_id' => ['nullable', 'integer', 'exists:workers,id'],
             'force_password_change' => ['nullable', 'boolean'],
             'line_ids' => ['nullable', 'array'],
             'line_ids.*' => ['integer', 'exists:lines,id'],
@@ -34,7 +34,6 @@ class StoreUserRequest extends FormRequest
     {
         return [
             'name.regex' => 'Name may only contain letters, numbers, spaces, dots, hyphens, and apostrophes.',
-            'worker_id.unique' => 'This worker already has a user account.',
         ];
     }
 }

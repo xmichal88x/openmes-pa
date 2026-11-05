@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Web\Operator;
 
 use App\Exceptions\InsufficientStockException;
+use App\Exceptions\StartConfirmationRequiredException;
+use App\Exceptions\StartPreflightException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Operator\CompleteBatchStepRequest;
 use App\Http\Requests\Operator\RecordStepQuantityRequest;
@@ -23,6 +25,7 @@ use App\Services\Production\PackagingChecklistService;
 use App\Services\Production\ProcessConfirmationService;
 use App\Services\Production\QualityCheckService;
 use App\Services\WorkOrder\BatchService;
+use App\Services\WorkOrder\StartPreflightService;
 use App\Services\WorkOrder\WorkOrderService;
 use Illuminate\Http\Request;
 
@@ -37,6 +40,7 @@ class BatchController extends Controller
         protected PackagingChecklistService $checklistService,
         protected BatchService $batchService,
         protected MaterialAllocationService $allocationService,
+        protected StartPreflightService $startPreflightService,
     ) {}
 
     /**
@@ -53,6 +57,20 @@ class BatchController extends Controller
         return response()->json([
             'materials' => $this->allocationService->pickPreviewForStep($batchStep),
         ]);
+    }
+
+    /**
+     * Read-only queue preflight for a step: lets the operator UI show whether a
+     * start would be blocked (rebuilding / merged source) or needs a shared-sheet
+     * confirmation. Changes no status and writes no audit row.
+     */
+    public function startPreflight(Request $request, BatchStep $batchStep)
+    {
+        if (! $this->stepBelongsToSelectedLine($request, $batchStep)) {
+            return response()->json(['message' => 'This step does not belong to the selected line.'], 403);
+        }
+
+        return response()->json($this->startPreflightService->check($batchStep));
     }
 
     /**
@@ -79,10 +97,41 @@ class BatchController extends Controller
 
         try {
             $picksByMaterial = $this->reshapePicks($request->validated()['picks'] ?? []);
-            $this->batchService->startStep($batchStep, $request->user(), $picksByMaterial);
+            $this->batchService->startStep(
+                $batchStep,
+                $request->user(),
+                $picksByMaterial,
+                $request->boolean('confirm_shared_sheet'),
+            );
             \Log::debug('startStep succeeded', ['step_id' => $batchStep->id]);
 
-            return back()->with('success', __('Step started. Materials have been allocated.'));
+            $response = back()->with('success', __('Step started. Materials have been allocated.'));
+
+            $preflight = $this->batchService->lastPreflight();
+            if (! empty($preflight['warning'])) {
+                return $response->with('warning', __('The queue could not be checked (:reason); the step was started anyway.', [
+                    'reason' => $preflight['warning'],
+                ]));
+            }
+
+            return $response;
+        } catch (StartConfirmationRequiredException $e) {
+            \Log::warning('startStep shared sheet confirmation required', ['step_id' => $batchStep->id]);
+
+            return back()
+                ->withErrors(['confirm_shared_sheet' => $e->getMessage()])
+                ->with('error', $e->getMessage());
+        } catch (StartPreflightException $e) {
+            \Log::warning('startStep preflight blocked', [
+                'step_id' => $batchStep->id,
+                'reason' => $e->getReason(),
+            ]);
+
+            return back()
+                ->withErrors(['step' => $e->getMessage()])
+                ->with('error', $e->getMessage())
+                ->with('preflight_reason', $e->getReason())
+                ->with('preflight_queue_reason', $e->getContext()['queue_reason'] ?? null);
         } catch (InsufficientStockException|\DomainException $e) {
             \Log::warning('startStep domain error', ['step_id' => $batchStep->id, 'message' => $e->getMessage()]);
 

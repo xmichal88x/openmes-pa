@@ -3,9 +3,7 @@ import { Link, router, usePage } from '@inertiajs/react';
 import { ICONS, ICON_LUCIDE, ADMIN_LINKS, ADMIN_GROUPS } from './adminNav';
 import { SUPERVISOR_LINKS, SUPERVISOR_GROUPS } from './supervisorNav';
 import { byOrder, groupMatch, mergeChildren, mergeGroups } from '../lib/navMerge';
-import { filterNavItems, flattenNavItems, groupVisible, searchResultKeys } from '../lib/navSearch';
 import LiveAlertCount from '../components/LiveAlertCount';
-import ViewAsBar from '../components/ViewAsBar';
 import LatestAlerts from '../components/LatestAlerts';
 import Tooltip from '../components/Tooltip';
 import HoverPanel from '../components/HoverPanel';
@@ -265,16 +263,11 @@ export const PAGE_TITLE_SLOT = '[data-page-title-slot]';
  * Admin wins when a user holds both roles: it is the larger tree, and it is the
  * one the per-tab access matrix governs. Module hooks register against the admin
  * groups, so they merge only there.
- *
- * An administrator who chose the supervisor view in the view switcher gets the
- * supervisor tree. `viewAs` is sent to Admins only, and the supervisor routes
- * admit Admins, so every entry in that tree still opens.
  */
 function useNavTree() {
     const page = usePage();
     const isAdmin = page.props.auth?.user?.roles?.includes('Admin');
     const isSupervisor = page.props.auth?.user?.roles?.includes('Supervisor');
-    const viewAs = page.props.viewAs;
     const moduleNav = page.props.moduleNav;
     // Which admin tabs this user may open (#144) — role grants and enabled
     // modules, resolved server-side.
@@ -283,7 +276,7 @@ function useNavTree() {
     const enabledModules = page.props.enabledModules;
 
     return useMemo(() => {
-        if ((! isAdmin && isSupervisor) || (isAdmin && viewAs === 'supervisor')) {
+        if (! isAdmin && isSupervisor) {
             return {
                 links: withEnabledModules(SUPERVISOR_LINKS, enabledModules),
                 groups: withEnabledModules(SUPERVISOR_GROUPS, enabledModules),
@@ -300,7 +293,7 @@ function useNavTree() {
             groups: mergeModuleNav(moduleNav),
             showTab: (key) => ! Array.isArray(allowedTabs) || ! key || allowedTabs.includes(key),
         };
-    }, [isAdmin, isSupervisor, viewAs, moduleNav, allowedTabs, enabledModules]);
+    }, [isAdmin, isSupervisor, moduleNav, allowedTabs, enabledModules]);
 }
 
 export default function AppLayout({ children }) {
@@ -380,8 +373,6 @@ export default function AppLayout({ children }) {
             )}
 
             <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-                {/* Administrator's view switcher — renders nothing for other roles. */}
-                <ViewAsBar />
                 {/* Mobile top bar */}
                 <header className="lg:hidden shrink-0 flex items-center gap-3 h-14 px-4 bg-om-card border-b border-om-line z-20">
                     <button
@@ -522,6 +513,48 @@ function DesktopClock({ collapsed, onToggleCollapsed, navTrail = [], showNavTrai
     );
 }
 
+/**
+ * Flat list of every navigable sidebar item (top links, group/subgroup headers
+ * that have their own landing page, and children) for the sidebar search.
+ * `trail` is the group path shown under a result, e.g. "Production /
+ * Production Lines". Disabled entries are skipped.
+ */
+// A nav group is visible when its own tab is accessible OR at least one of its
+// descendants carries its own (different) accessible tab. The second clause lets
+// a group survive when its header key is off but a fine-grained child module is
+// on — e.g. Reports hidden but Advanced reports enabled. Groups whose children
+// have no explicit tab fall back to the header key alone.
+function groupVisible(group, showTab) {
+    // Groups that are not a feature module — Settings holds the current user's
+    // own profile, password and 2FA, which no enabled-module set should hide.
+    if (group.alwaysVisible) return true;
+    if (showTab(group.tab ?? group.key)) return true;
+    const anyChild = (nodes) => (nodes || []).some((n) =>
+        n.children ? anyChild(n.children) : (n.tab && showTab(n.tab)));
+    return anyChild(group.children);
+}
+
+function flattenNavItems(showTab, groups, links) {
+    const items = links.filter((link) => showTab(link.key)).map((link) => ({
+        label: link.label, href: link.href, match: link.match, exact: link.exact, trail: [],
+    }));
+    const walk = (nodes, trail) => {
+        nodes.filter((node) => showTab(node.tab)).forEach((node) => {
+            if (node.href && !node.disabled) {
+                items.push({ label: node.label, href: node.href, match: node.match, exact: node.exact, external: node.external, trail });
+            }
+            if (node.children) {
+                walk(node.children, [...trail, node.label]);
+            }
+        });
+    };
+    // Index groups with at least one accessible tab (role + enabled module — #144);
+    // module-declared groups are always indexed (already gated server-side).
+    walk(groups.filter((group) => group.moduleGroup || groupVisible(group, showTab)), []);
+    items.push({ label: 'Settings', href: '/settings', match: ['/settings'], trail: [] });
+    return items;
+}
+
 function Sidebar({
     auth, alertCount, csrfToken, appVersion, path, collapsed, mobileOpen, showLabels,
     dark, onToggleCollapsed, onToggleDark, onCloseMobile,
@@ -540,8 +573,14 @@ function Sidebar({
     // in the active locale.
     const [query, setQuery] = useState('');
     const searchItems = useMemo(() => flattenNavItems(showTab, navGroups, navLinks), [showTab, navGroups, navLinks]);
-    const results = filterNavItems(searchItems, query, __);
-    const resultKeys = results ? searchResultKeys(results) : [];
+    const q = query.trim().toLowerCase();
+    const results = q
+        ? searchItems.filter((item) =>
+            [item.label, __(item.label), ...item.trail.flatMap((t) => [t, __(t)])]
+                .join(' ')
+                .toLowerCase()
+                .includes(q))
+        : null;
 
     const clearSearch = () => setQuery('');
     const submitSearch = () => {
@@ -607,14 +646,11 @@ function Sidebar({
             <nav className="sidebar-scroll flex-1 overflow-y-auto overflow-x-hidden pb-3 space-y-0.5">
                 {results ? (
                     results.length ? (
-                        results.map((item, index) => (
+                        results.map((item) => (
                             // Group headers can share an href with their first child
                             // (e.g. Orders and All Orders), so href alone isn't unique.
-                            // trail+label collides for two Settings rows, and React
-                            // then leaves the extra row in the sidebar. The key
-                            // helper keeps each row distinct.
                             <SearchResultLink
-                                key={resultKeys[index]}
+                                key={`${item.trail.join('/')}>${item.label}`}
                                 item={item}
                                 path={path}
                                 onNavigate={clearSearch}

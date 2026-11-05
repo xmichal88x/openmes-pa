@@ -3,9 +3,12 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\PackagingScanRequest;
+use App\Models\PackagingBox;
 use App\Models\PackagingScanLog;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderEan;
+use App\Services\Packaging\PackagingScanService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -79,11 +82,9 @@ class PackagingApiController extends Controller
 
     // ── Scan ────────────────────────────────────────────────────────────────
 
-    public function scan(Request $request): JsonResponse
+    public function scan(PackagingScanRequest $request, PackagingScanService $scanService): JsonResponse
     {
-        $validated = $request->validate([
-            'ean' => ['required', 'string', 'max:100'],
-        ]);
+        $validated = $request->validated();
 
         $eanRecord = WorkOrderEan::where('ean', $validated['ean'])->first();
         if (! $eanRecord) {
@@ -96,35 +97,48 @@ class PackagingApiController extends Controller
         }
 
         $user = $request->user();
-        if ($user->hasRole('Operator')) {
+        if ($user->hasAnyRole(['Operator', 'PackingWorker'])) {
             $hasAccess = $user->lines()->where('lines.id', $workOrder->line_id)->exists();
             if (! $hasAccess) {
                 return response()->json(['message' => __('You do not have access to this line.')], 403);
             }
         }
 
-        if (! in_array($workOrder->status, [WorkOrder::STATUS_DONE, WorkOrder::STATUS_IN_PROGRESS], true)) {
+        if (! empty($validated['work_order_id']) && (int) $eanRecord->work_order_id !== (int) $validated['work_order_id']) {
+            return response()->json(['message' => __('Code belongs to a different work order')], 409);
+        }
+
+        if (! WorkOrder::whereKey($workOrder->id)->packable()->exists()) {
             return response()->json([
                 'message' => __('Work order not in a packable state (current: :status)', ['status' => $workOrder->status]),
             ], 422);
         }
 
-        $planned = (int) $workOrder->planned_qty;
-        if ($planned > 0 && $workOrder->packed_qty >= $planned) {
-            return response()->json(['message' => __('Work order fully packed')], 422);
+        $box = null;
+        if (! empty($validated['box_id'])) {
+            $box = PackagingBox::when(
+                is_numeric($validated['box_id']),
+                fn ($q) => $q->whereKey((int) $validated['box_id']),
+                fn ($q) => $q->where('box_id', (string) $validated['box_id']),
+            )->first();
+
+            if (! $box) {
+                return response()->json(['message' => __('Unknown box')], 404);
+            }
+
+            if ((int) $box->work_order_id !== (int) $workOrder->id) {
+                return response()->json(['message' => __('Box belongs to a different work order')], 409);
+            }
         }
 
-        $workOrder->increment('packed_qty');
-        \App\Sync\CollectionBroadcaster::flush($workOrder); // increment() bypasses model events
-        $workOrder->refresh();
+        $pallet = null;
+        if (! empty($validated['pallet_id'])) {
+            $pallet = \App\Models\Pallet::find($validated['pallet_id']);
+        }
 
-        $log = PackagingScanLog::create([
-            'user_id' => $user?->id,
-            'work_order_id' => $workOrder->id,
-            'ean' => $validated['ean'],
-            'product_name' => $this->productLabel($workOrder),
-            'scanned_at' => now(),
-        ]);
+        $result = $scanService->scan($eanRecord, $workOrder, $pallet, $user, $box);
+        $workOrder = $result['work_order'];
+        $log = $result['scan_log'];
 
         return response()->json([
             'message' => __('Packed: :name', ['name' => $this->productLabel($workOrder)]),
@@ -133,13 +147,14 @@ class PackagingApiController extends Controller
                     'id' => $workOrder->id,
                     'order_no' => $workOrder->order_no,
                     'product' => $this->productLabel($workOrder),
-                    'planned_qty' => $planned,
+                    'planned_qty' => (int) $workOrder->planned_qty,
                     'packed_qty' => $workOrder->packed_qty,
                     'status' => $workOrder->status,
                 ],
                 'scan' => [
                     'id' => $log->id,
                     'ean' => $log->ean,
+                    'box_id' => $result['box']?->box_id,
                     'scanned_at' => $log->scanned_at->toIso8601String(),
                 ],
             ],

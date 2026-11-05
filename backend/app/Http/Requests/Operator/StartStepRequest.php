@@ -42,6 +42,7 @@ class StartStepRequest extends FormRequest
             'picks.*.lots' => ['required', 'array', 'min:1'],
             'picks.*.lots.*.material_lot_id' => ['required', 'integer', 'exists:material_lots,id'],
             'picks.*.lots.*.picked_qty' => ['required', 'numeric', 'gt:0'],
+            'confirm_shared_sheet' => ['sometimes', 'boolean'],
         ]);
     }
 }

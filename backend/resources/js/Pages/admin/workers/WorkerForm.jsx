@@ -1,5 +1,4 @@
-import { Link, usePage } from '@inertiajs/react';
-import { cloneElement, isValidElement, useId } from 'react';
+import { Link } from '@inertiajs/react';
 import { Button, Checkbox, Dropdown } from '@openmes/ui';
 import { __ } from '../../../lib/i18n';
 import CustomFields from '../../../components/CustomFields';
@@ -16,8 +15,6 @@ import { nameControl } from '../../../lib/fieldName';
  */
 export default function WorkerForm({ form, crews, wageGroups, personnelClasses, skills, customFields = [], hooks, isEdit, onSubmit }) {
     const { data, setData, errors, processing } = form;
-    // One currency per installation (Settings → System); pay rates are in it.
-    const { currency } = usePage().props;
 
     const selectedSkills = new Map((data.skills ?? []).map((s) => [String(s.id), s.level ?? 1]));
 
@@ -36,12 +33,7 @@ export default function WorkerForm({ form, crews, wageGroups, personnelClasses, 
     return (
         <form onSubmit={onSubmit} className="bg-om-card rounded-om-sm shadow-sm p-6 max-w-3xl space-y-5">
             <div className="grid grid-cols-2 gap-4">
-                <Field
-                    label={__('Code')}
-                    error={errors.code}
-                    required
-                    help={__('Unique identifier of this worker across the whole system, e.g. W-201. No two workers can share a code.')}
-                >
+                <Field label={__('Code')} error={errors.code} required>
                     <input type="text" value={data.code} onChange={(e) => setData('code', e.target.value)} className="form-input w-full" />
                 </Field>
                 <Field label={__('Name')} error={errors.name} required>
@@ -96,23 +88,18 @@ export default function WorkerForm({ form, crews, wageGroups, personnelClasses, 
                         />
                     </Field>
                     <Field label={__('Pay rate')} error={errors.pay_rate}>
-                        <div className="flex items-center gap-2">
-                            <input type="number" step="0.0001" min="0" value={data.pay_rate ?? ''} onChange={(e) => setData('pay_rate', e.target.value)} className="form-input w-full" />
-                            <span className="font-mono text-sm text-om-muted" data-testid="pay-rate-currency">{currency}</span>
-                        </div>
+                        <input type="number" step="0.0001" min="0" value={data.pay_rate ?? ''} onChange={(e) => setData('pay_rate', e.target.value)} className="form-input w-full" />
                     </Field>
                 </div>
-                <p className="mt-1 text-xs text-om-faint">{__('Rate in the system currency (:currency). Hourly/weekly: per hour/week. Piece rate: per produced piece.', { currency })}</p>
+                <p className="mt-1 text-xs text-om-faint">{__('Hourly/weekly: rate per hour/week. Piece rate: amount per produced piece. Currency is set system-wide in Settings.')}</p>
             </div>
 
-            <div className="flex flex-col items-start gap-3">
-                <Checkbox checked={!!data.is_active} onChange={(next) => setData('is_active', next)} label={__('Active')} />
-                <Checkbox
-                    checked={!!data.is_logistics}
-                    onChange={(next) => setData('is_logistics', next)}
-                    label={__('Logistics operator (can move pallets)')}
-                />
-            </div>
+            <Checkbox checked={!!data.is_active} onChange={(next) => setData('is_active', next)} label={__('Active')} />
+            <Checkbox
+                checked={!!data.is_logistics}
+                onChange={(next) => setData('is_logistics', next)}
+                label={__('Logistics operator (can move pallets)')}
+            />
 
             <div>
                 <div className="block text-sm font-medium text-om-muted mb-2">{__('Skills & level (1-5)')}</div>
@@ -123,7 +110,7 @@ export default function WorkerForm({ form, crews, wageGroups, personnelClasses, 
                         const on = selectedSkills.has(id);
                         return (
                             <div key={skill.id} className="flex items-center gap-3 px-3 py-2">
-                                <Checkbox className="flex-1 min-w-0" checked={on} onChange={(next) => toggleSkill(skill.id, next)} label={skill.name} />
+                                <Checkbox className="flex-1" checked={on} onChange={(next) => toggleSkill(skill.id, next)} label={skill.name} />
                                 {on && (
                                     <Dropdown
                                         options={[1, 2, 3, 4, 5].map((l) => ({ value: String(l), label: String(l) }))}
@@ -158,16 +145,13 @@ export default function WorkerForm({ form, crews, wageGroups, personnelClasses, 
     );
 }
 
-function Field({ label, error, required, help, children }) {
-    const helpId = useId();
-    const control = help && isValidElement(children) ? cloneElement(children, { 'aria-describedby': helpId }) : children;
+function Field({ label, error, required, children }) {
     return (
         <div>
             <div className="block text-sm font-medium text-om-muted mb-1">
                 {label} {required && <span className="text-om-blocked">*</span>}
             </div>
-            {nameControl(control, label)}
-            {help && <p id={helpId} className="mt-1 text-xs text-om-faint">{help}</p>}
+            {nameControl(children, label)}
             {error && <p className="mt-1 text-xs text-om-blocked">{error}</p>}
         </div>
     );

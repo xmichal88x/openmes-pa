@@ -31,6 +31,7 @@ use App\Http\Controllers\Api\V1\LabelTemplateController;
 use App\Http\Controllers\Api\V1\LineController;
 use App\Http\Controllers\Api\V1\LineStatusController;
 use App\Http\Controllers\Api\V1\LotSequenceController;
+use App\Http\Controllers\Api\V1\MachineCommandController;
 use App\Http\Controllers\Api\V1\MachineMonitorController;
 use App\Http\Controllers\Api\V1\MaintenanceEventController;
 use App\Http\Controllers\Api\V1\MaintenanceScheduleController;
@@ -323,7 +324,7 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     Route::post('/attachments', [AttachmentController::class, 'store']);
     Route::delete('/attachments/{attachment}', [AttachmentController::class, 'destroy']);
 
-    // Connectivity (Admin-only — policy enforced)
+    // Connectivity (reads: Admin + MachineBridge; writes: Admin-only — policy enforced)
     Route::get('/connectivity/connections', [ConnectivityController::class, 'listConnections']);
     Route::post('/connectivity/connections', [ConnectivityController::class, 'storeConnection']);
     Route::get('/connectivity/connections/{machineConnection}', [ConnectivityController::class, 'showConnection']);
@@ -588,6 +589,57 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::patch('/label-templates/{labelTemplate}', [LabelTemplateController::class, 'update']);
         Route::post('/label-templates/{labelTemplate}/set-default', [LabelTemplateController::class, 'setDefault']);
         Route::delete('/label-templates/{labelTemplate}', [LabelTemplateController::class, 'destroy']);
+    });
+
+    // Packaging boxes, boxes-mode pallets and the dispatch outbox (R07).
+    // Core (not a module): the packing station and mobile app share the contract.
+    Route::prefix('packaging')->middleware('role:Operator|Supervisor|Admin|PackingWorker|PackingBridge')->group(function () {
+        Route::post('/scan', [\App\Http\Controllers\Api\V1\PackagingApiController::class, 'scan']);
+        Route::get('/boxes', [\App\Http\Controllers\Api\V1\PackagingBoxController::class, 'index']);
+        Route::post('/boxes', [\App\Http\Controllers\Api\V1\PackagingBoxController::class, 'store']);
+        Route::get('/boxes/{box}', [\App\Http\Controllers\Api\V1\PackagingBoxController::class, 'show']);
+        Route::post('/boxes/{box}/close', [\App\Http\Controllers\Api\V1\PackagingBoxController::class, 'close']);
+        Route::post('/boxes/{box}/reopen', [\App\Http\Controllers\Api\V1\PackagingBoxController::class, 'reopen']);
+        Route::post('/boxes/{box}/eans', [\App\Http\Controllers\Api\V1\PackagingBoxController::class, 'assignCode']);
+        Route::post('/boxes/{box}/pallet', [\App\Http\Controllers\Api\V1\PackagingBoxController::class, 'assignPallet']);
+        Route::delete('/boxes/{box}/pallet', [\App\Http\Controllers\Api\V1\PackagingBoxController::class, 'unassignPallet']);
+        Route::delete('/boxes/{box}', [\App\Http\Controllers\Api\V1\PackagingBoxController::class, 'destroy']);
+
+        Route::get('/pallets', [\App\Http\Controllers\Api\V1\PackagingBoxController::class, 'pallets']);
+        Route::post('/pallets', [\App\Http\Controllers\Api\V1\PackagingBoxController::class, 'storePallet']);
+        Route::post('/pallets/{pallet}/quality', [\App\Http\Controllers\Api\V1\PalletQualityController::class, 'store'])
+            ->middleware('permission:dispatch packing');
+
+        Route::get('/dispatches', [\App\Http\Controllers\Api\V1\PackagingDispatchController::class, 'index']);
+        Route::post('/dispatch', [\App\Http\Controllers\Api\V1\PackagingDispatchController::class, 'store']);
+        Route::post('/dispatches/{dispatch}/cancel', [\App\Http\Controllers\Api\V1\PackagingDispatchController::class, 'cancel']);
+
+        // Machine-only result path: PA claims the outbox row, reports the
+        // shipment and closes external shipments. No human role holds this.
+        Route::middleware('permission:process packing dispatch')->group(function () {
+            Route::post('/dispatches/external-close', [\App\Http\Controllers\Api\V1\PackagingDispatchController::class, 'externalClose']);
+            Route::patch('/dispatches/{dispatch}', [\App\Http\Controllers\Api\V1\PackagingDispatchController::class, 'update']);
+        });
+    });
+
+    // Machine command outbox (P1b). Humans request intents on their own line;
+    // the machine bridge claims/completes them behind an extra permission.
+    Route::prefix('machine')->middleware('throttle:120,1')->group(function () {
+        Route::get('/commands', [MachineCommandController::class, 'index']);
+        Route::post('/commands', [MachineCommandController::class, 'store']);
+
+        // Claim must precede the {machineCommand} routes. The worker path is
+        // covered by the prefix budget below: the gateway polls claim/update at
+        // roughly 12–24 requests per minute, so 120/min is enough. A second,
+        // nested limiter made Laravel count both buckets and throttled the
+        // worker even though the prefix still had headroom.
+        Route::middleware('permission:process machine commands')->group(function () {
+            Route::post('/commands/claim', [MachineCommandController::class, 'claim']);
+            Route::patch('/commands/{machineCommand}', [MachineCommandController::class, 'update']);
+        });
+
+        Route::get('/commands/{machineCommand}', [MachineCommandController::class, 'show']);
+        Route::post('/commands/{machineCommand}/cancel', [MachineCommandController::class, 'cancel']);
     });
 
     // Work Orders

@@ -18,8 +18,6 @@
         </include>
     </source>
     <php>
-        <!-- The full suite outgrows PHP's default 128M; matches .githooks/pre-commit. -->
-        <ini name="memory_limit" value="1G"/>
         <env name="APP_ENV" value="testing"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
@@ -35,5 +33,7 @@
         <!-- The suite must never be able to phone home, whatever APP_ENV says. -->
         <env name="OPENMES_TELEMETRY" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <!-- Never call the real queue runtime from the suite. -->
+        <env name="QUEUE_PREFLIGHT_ENABLED" value="false"/>
     </php>
 </phpunit>

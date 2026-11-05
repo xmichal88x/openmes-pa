@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\WorkOrder\ResumeWorkOrderRequest;
+use App\Models\Line;
 use App\Models\WorkOrder;
 use App\Services\WorkOrder\WorkOrderService;
 use App\Services\WorkOrder\WorkOrderStopService;
@@ -26,7 +27,7 @@ class WorkOrderController extends Controller
         $user = $request->user();
 
         // Get filters from request
-        $filters = $request->only(['status', 'line_id']);
+        $filters = $request->only(['status', 'line_id', 'customer_order_no']);
 
         $workOrders = $this->workOrderService->getWorkOrdersForUser($user, $filters);
 
@@ -63,9 +64,16 @@ class WorkOrderController extends Controller
      */
     public function store(\App\Http\Requests\Api\V1\StoreWorkOrderRequest $request): JsonResponse
     {
-        $this->authorize('create', WorkOrder::class);
-
         $validated = $request->validated();
+
+        // A PACKING order is governed by the narrow packaging grant, not by the
+        // generic CNC 'create work orders' permission (#R07).
+        $line = isset($validated['line_id']) ? Line::find($validated['line_id']) : null;
+        if ($line?->code === 'PACKING') {
+            $this->authorize('createPacking', WorkOrder::class);
+        } else {
+            $this->authorize('create', WorkOrder::class);
+        }
 
         $workOrder = $this->workOrderService->createWorkOrder($validated);
 
@@ -80,7 +88,7 @@ class WorkOrderController extends Controller
      */
     public function update(\App\Http\Requests\Api\V1\UpdateWorkOrderRequest $request, WorkOrder $workOrder): JsonResponse
     {
-        $this->authorize('update', $workOrder);
+        $this->authorizeWorkOrderUpdate($workOrder);
 
         $validated = $request->validated();
 
@@ -189,7 +197,7 @@ class WorkOrderController extends Controller
 
     private function transition(WorkOrder $workOrder, string $target, array $allowedFrom, string $errorMessage): JsonResponse
     {
-        $this->authorize('update', $workOrder);
+        $this->authorizeWorkOrderUpdate($workOrder, $target);
 
         if (! in_array($workOrder->status, $allowedFrom, true)) {
             return response()->json(['message' => $errorMessage], 422);
@@ -203,5 +211,30 @@ class WorkOrderController extends Controller
             'message' => "Work order status set to {$target}",
             'data' => $workOrder->fresh(['line', 'productType']),
         ]);
+    }
+
+    /**
+     * PACKING orders use the narrow packaging grants. The bridge account must
+     * never need the generic CNC edit permission (#R07).
+     */
+    private function authorizeWorkOrderUpdate(WorkOrder $workOrder, ?string $target = null): void
+    {
+        $isPacking = $workOrder->line?->code === 'PACKING';
+
+        // Start/complete of a PACK order are the step the bridge runs. Other
+        // transitions (accept, cancel, pause, …) keep the legacy behaviour.
+        if ($isPacking && in_array($target, [WorkOrder::STATUS_IN_PROGRESS, WorkOrder::STATUS_DONE], true)) {
+            $this->authorize('managePacking', $workOrder);
+
+            return;
+        }
+
+        if ($isPacking && $target === null) {
+            $this->authorize('managePacking', $workOrder);
+
+            return;
+        }
+
+        $this->authorize('update', $workOrder);
     }
 }

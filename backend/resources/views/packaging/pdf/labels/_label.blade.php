@@ -3,6 +3,12 @@
     <table class="label-grid">
         <tr>
             <td class="label-content" style="width: {{ $label['content_width'] }}mm;">
+                @if($template->hasField('box_id') && !empty($label['fields']['box_id']))
+                    <div class="line wo-number">{{ $label['fields']['box_id'] }}</div>
+                @endif
+                @if($template->hasField('box_position') && !empty($label['fields']['box_position']))
+                    <div class="line">{{ $label['fields']['box_position'] }}</div>
+                @endif
                 @if($template->hasField('serial_no') && !empty($label['fields']['serial_no']))
                     <div class="line wo-number">{{ $label['fields']['serial_no'] }}</div>
                 @endif
@@ -20,6 +26,9 @@
                 @endif
                 @if($template->hasField('quantity') && !empty($label['fields']['quantity']))
                     <div class="line">Qty: <strong>{{ $label['fields']['quantity'] }}</strong></div>
+                @endif
+                @if($template->hasField('weight') && !empty($label['fields']['weight']))
+                    <div class="line">{{ __('Weight') }}: <strong>{{ $label['fields']['weight'] }}</strong></div>
                 @endif
                 @if($template->hasField('material') && !empty($label['fields']['material']))
                     <div class="line product">{{ $label['fields']['material'] }}</div>

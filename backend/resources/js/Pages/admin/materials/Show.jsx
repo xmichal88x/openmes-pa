@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import { Head, useForm } from '@inertiajs/react';
 import { Button, Modal, StatusBadge, TextField } from '@openmes/ui';
 import { __ } from '../../../lib/i18n';
-import { formatMoney } from '../../../lib/money';
 import ResourceFormDrawer, { useResourceDrawer } from '../../../components/ResourceFormDrawer';
 import { materialFields, materialInitial } from './fields';
 import { materialLotStatusBadge } from '../material-lots/fields';
@@ -284,7 +283,7 @@ export default function MaterialShow({ material, lots = [], recentMovements = []
                                 <div className="flex justify-between text-xs text-om-faint">
                                     <dt>{__('Stock value')}</dt>
                                     <dd className="font-mono">
-                                        {formatMoney(material.stock_quantity * material.unit_price, material.price_currency)}
+                                        {Number(material.stock_quantity * material.unit_price).toFixed(2)} {material.price_currency}
                                     </dd>
                                 </div>
                             )}

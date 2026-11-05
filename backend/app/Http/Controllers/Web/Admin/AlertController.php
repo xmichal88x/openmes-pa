@@ -31,11 +31,7 @@ class AlertController extends Controller
     }
 
     /**
-     * Returns total alert count for navbar badge (the `nav.alertCount` fallback).
-     *
-     * "Overdue" is a due date before `today()`, which runs in the plant timezone
-     * (TimezoneRegistry::apply). The live badge recomputes this in the browser —
-     * keep resources/js/lib/alerts.js in step with any change to this rule.
+     * Returns total alert count for navbar badge (called via shared view composer).
      */
     public static function totalCount(): int
     {

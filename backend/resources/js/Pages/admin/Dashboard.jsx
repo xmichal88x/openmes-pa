@@ -1,19 +1,15 @@
-// Geist White restyle — om-* tokens + @openmes/ui, light and dark (.dark) themes. "Plant overview" header +
-// section grid on top (components/dashboard/overview), the original widgets below under "Last 30 days".
+// Geist White restyle: light-only v1 — om-* tokens + @openmes/ui (live-shape wiring and stats logic untouched).
 import { useMemo, useState } from 'react';
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, usePage } from '@inertiajs/react';
 import { Badge, Dropdown, StatusPill } from '@openmes/ui';
 import { DataTable } from '@openmes/ui/table';
 import { useDashboardShapes } from '../../lib/useDashboardShapes';
 import { useHotShapes } from '../../components/LiveShapesProvider';
 import OeeGauge, { oeeColor } from '../../components/OeeGauge';
 import AppLayout from '../../layouts/AppLayout';
-import { __, todayInPlant } from '../../lib/i18n';
-import OverviewHeader from '../../components/dashboard/overview/OverviewHeader';
-import OverviewGrid from '../../components/dashboard/overview/OverviewGrid';
-import useOverviewRefresh from '../../components/dashboard/overview/useOverviewRefresh';
+import { __ } from '../../lib/i18n';
+import { formatDateTime } from '../../lib/i18n';
 import { TIER_BADGE_STYLES, tierLabel } from './customers/fields';
-import { boolColumn } from '../../lib/syncedRow';
 
 const WO_TERMINAL = ['DONE', 'CANCELLED', 'REJECTED'];
 
@@ -26,7 +22,7 @@ export default function AdminDashboard(props) {
 
     return (
         <>
-            <Head title={__('Plant overview')} />
+            <Head title={__('Admin Dashboard')} />
             <DashboardBody hot={hot} {...props} />
         </>
     );
@@ -46,9 +42,7 @@ function DashboardBody({
     nonConformanceStats,
     topCustomers,
     moduleWidgets = {},
-    overview,
 }) {
-    const liveOk = useOverviewRefresh();
     const { workOrders, lines, issues, issueTypes, oeeRecords, isLoading, error } =
         useDashboardShapes(hot);
 
@@ -70,8 +64,8 @@ function DashboardBody({
     }, [issues, workOrders, selectedLineId]);
 
     const stats = useMemo(
-        () => computeStats(scopedWorkOrders, scopedIssues, lines),
-        [scopedWorkOrders, scopedIssues, lines],
+        () => computeStats(scopedWorkOrders, scopedIssues, issueTypes, lines),
+        [scopedWorkOrders, scopedIssues, issueTypes, lines],
     );
 
     const recentWorkOrders = useMemo(
@@ -100,15 +94,8 @@ function DashboardBody({
     const moduleMain = moduleWidgets.main ?? [];
 
     return (
-        // AppLayout's <main> has no padding of its own; the page brings it, as
-        // in the mockup (32/40 px), tighter on phones.
-        <div className="max-w-7xl mx-auto flex flex-col gap-8 px-4 py-6 sm:px-6 lg:px-10 lg:pt-8 lg:pb-12">
-            <OverviewHeader shift={overview?.shift} liveOk={liveOk} />
-
-            <OverviewGrid overview={overview} />
-
-            <section aria-labelledby="dashboard-last-30-days">
-                <Last30Header
+        <div className="max-w-7xl mx-auto">
+                <Header
                     selectedLineId={selectedLineId}
                     onLineChange={setSelectedLineId}
                     lines={lines}
@@ -193,19 +180,22 @@ function DashboardBody({
                         </Section>
                     ))}
                 </div>
-            </section>
         </div>
     );
 }
 
-/** Heading of the original widget area, with the line filter that scopes it. */
-function Last30Header({ selectedLineId, onLineChange, lines }) {
+function Header({ selectedLineId, onLineChange, lines }) {
+    const { locale } = usePage().props;
     const selectedLine = lines.find((l) => String(l.id) === String(selectedLineId));
+    const dateStr = new Date().toLocaleString(locale, {
+        day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
     return (
         <div className="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
-                <h2 id="dashboard-last-30-days" className="text-[18px] font-semibold text-om-ink">{__('Last 30 days')}</h2>
+                <h1 className="text-[26px] font-semibold tracking-[-0.02em] text-om-ink">{__('Admin Dashboard')}</h1>
                 <p className="text-om-muted mt-1 text-sm">
+                    {formatDateTime(new Date())}{' '}
                     {selectedLine ? (
                         <>— <span className="font-medium text-om-accent">{selectedLine.name}</span></>
                     ) : (
@@ -319,9 +309,9 @@ function KpiCard({ href, label, value, accent, hint }) {
 function OeeOverview({ records, lines }) {
     // Today's OEE per line. Mirrors the old Blade widget: one gauge card per
     // line, N/A where there's no record for today.
-    const todayStr = todayInPlant(); // plant date, not UTC
+    const todayStr = new Date().toISOString().slice(0, 10);
     const byLineToday = useMemo(
-        () => new Map(records.filter((r) => String(r.record_date ?? '').slice(0, 10) === todayStr).map((r) => [String(r.line_id), r])),
+        () => new Map(records.filter((r) => r.record_date === todayStr).map((r) => [String(r.line_id), r])),
         [records, todayStr],
     );
     const sortedLines = useMemo(
@@ -382,7 +372,7 @@ function InboundQcOverview({ stats }) {
         <div className="bg-om-card border border-om-line rounded-om p-5">
             <div className="flex items-center justify-between mb-3">
                 <h2 className="text-[14px] font-semibold text-om-ink">{__('Inbound QC (30 days)')}</h2>
-                <a href="/operator/inspections" className="text-[12.5px] text-om-accent hover:underline">{__('View all')} →</a>
+                <a href="/inspections" className="text-[12.5px] text-om-accent hover:underline">{__('View all')} →</a>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 text-sm">
                 <Stat label={__('Pending')} value={stats.pending} />
@@ -648,7 +638,7 @@ function RecentIssues({ rows, issueTypes }) {
                                     </p>
                                 </div>
                                 <div className="flex gap-2 items-center">
-                                    {boolColumn(issue.blocks_work_order) && (
+                                    {type?.is_blocking && (
                                         <Badge variant="danger">{__('blocking')}</Badge>
                                     )}
                                     <StatusBadge status={issue.status} />
@@ -710,7 +700,7 @@ function ModuleWidget({ w, compact = false }) {
         : <Link href={w.href} className={cls}>{card}</Link>;
 }
 
-function computeStats(workOrders, issues, lines) {
+function computeStats(workOrders, issues, issueTypes, lines) {
     const counts = workOrders.reduce(
         (acc, wo) => {
             acc.total++;
@@ -731,7 +721,12 @@ function computeStats(workOrders, issues, lines) {
         (wo) => (wo.updated_at ?? '').slice(0, 10) === today,
     ).length;
 
-    const blocking_issues = issues.filter((i) => boolColumn(i.blocks_work_order)).length;
+    const blockingTypeIds = new Set(
+        issueTypes.filter((t) => t.is_blocking).map((t) => String(t.id)),
+    );
+    const blocking_issues = issues.filter((i) =>
+        blockingTypeIds.has(String(i.issue_type_id)),
+    ).length;
 
     return {
         total_work_orders: counts.total,

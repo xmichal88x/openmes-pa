@@ -2,9 +2,13 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Exceptions\StartConfirmationRequiredException;
+use App\Exceptions\StartPreflightException;
+use App\Exceptions\SystemFanoutForbiddenException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\AssignBatchStepWorkstationRequest;
 use App\Http\Requests\Api\V1\CompleteBatchStepRequest;
+use App\Http\Requests\Api\V1\StartBatchStepRequest;
 use App\Models\BatchStep;
 use App\Services\IssueService;
 use App\Services\WorkOrder\BatchService;
@@ -21,17 +25,51 @@ class BatchStepController extends Controller
     /**
      * Start a batch step.
      */
-    public function start(Request $request, BatchStep $batchStep): JsonResponse
+    public function start(StartBatchStepRequest $request, BatchStep $batchStep): JsonResponse
     {
-        $this->authorize('view', $batchStep->batch->workOrder);
+        $validated = $request->validated();
 
         try {
-            $step = $this->batchService->startStep($batchStep, $request->user());
+            $step = $this->batchService->startStep(
+                $batchStep,
+                $request->user(),
+                [],
+                (bool) ($validated['confirm_shared_sheet'] ?? false),
+                false,
+                (bool) ($validated['system_fanout'] ?? false),
+            );
 
-            return response()->json([
+            $payload = [
                 'message' => 'Step started successfully',
                 'data' => $step->load(['startedBy', 'batch.workOrder']),
-            ]);
+            ];
+
+            $preflight = $this->batchService->lastPreflight();
+            if (! empty($preflight['warning'])) {
+                $payload['warning'] = $preflight['warning'];
+                $payload['preflight'] = $preflight;
+            }
+
+            return response()->json($payload);
+        } catch (SystemFanoutForbiddenException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+                'code' => 'system_fanout_forbidden',
+            ], 403);
+        } catch (StartConfirmationRequiredException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+                'code' => 'shared_sheet_confirm',
+                'data' => $e->getContext(),
+            ], 409);
+        } catch (StartPreflightException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+                'code' => 'shared_sheet_blocked',
+                'reason' => $e->getReason(),
+                'queue_reason' => $e->getContext()['queue_reason'] ?? null,
+                'data' => $e->getContext(),
+            ], 409);
         } catch (\Exception $e) {
             return response()->json([
                 'message' => $e->getMessage(),
@@ -146,7 +184,7 @@ class BatchStepController extends Controller
                 'message' => 'Issue reported successfully',
                 'data' => [
                     'issue' => $issue,
-                    'work_order_blocked' => $issue->blocks_work_order,
+                    'work_order_blocked' => $issue->issueType->is_blocking,
                 ],
             ], 201);
         } catch (\Exception $e) {

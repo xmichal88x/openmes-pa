@@ -1,0 +1,18 @@
+{
+    "name": "PipelineDashboard",
+    "display_name": "Panel Pipeline",
+    "version": "1.0.0",
+    "description": "End-to-end production pipeline visibility: Woo → Dolibarr → MES → Nesting → Production",
+    "author": "edeseczka",
+    "requires_core": ">=0.27.0",
+    "provider": "Modules\\PipelineDashboard\\Providers\\PipelineDashboardServiceProvider",
+    "hooks": [
+        "WorkOrder\\WorkOrderCreated",
+        "WorkOrder\\WorkOrderCompleted",
+        "BatchStep\\StepStarted",
+        "BatchStep\\StepCompleted",
+        "Menu\\addItem",
+        "Widget\\kpi"
+    ],
+    "requires": []
+}

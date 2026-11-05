@@ -825,7 +825,6 @@ function ViewColumnsCard({ line, viewColumns }) {
                             options={[
                                 { value: 'extra_data', label: 'extra_data' },
                                 { value: 'field', label: 'field' },
-                                { value: 'product_type', label: 'product_type' },
                             ]}
                             value={newSource}
                             onChange={(v) => setNewSource(v)}

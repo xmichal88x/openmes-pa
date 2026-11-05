@@ -19,8 +19,7 @@ use Illuminate\Support\Str;
  *   telemetry      → state metadata snapshot
  *   alarm          → fault / event log
  *
- * All signals are also appended to the MachineEvent store for replay/audit, and
- * every one marks the station as heard from (WorkstationStateMachine::markSignal).
+ * All signals are also appended to the MachineEvent store for replay/audit.
  */
 class MachineSignalIngestor
 {
@@ -45,12 +44,6 @@ class MachineSignalIngestor
             MachineTag::SIGNAL_ALARM => $this->handleAlarm($tag, $workstation, $value, $at),
             default => null,
         };
-
-        // Any signal, of any type, proves the collector is alive — even a
-        // state re-read that changes nothing (see WorkstationStateMachine).
-        if ($workstation) {
-            $this->stateMachine->markSignal($workstation);
-        }
     }
 
     private function handleState(MachineTag $tag, ?Workstation $ws, string $state, Carbon $at): void

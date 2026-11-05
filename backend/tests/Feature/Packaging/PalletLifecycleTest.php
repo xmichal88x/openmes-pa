@@ -37,7 +37,16 @@ class PalletLifecycleTest extends TestCase
 {
     use RefreshDatabase;
 
-    private const EAN = '5901234123457';
+    /** One EAN = one piece, so a five-piece pallet needs five distinct codes. */
+    private const EANS = [
+        '5901234123457',
+        '5901234123458',
+        '5901234123459',
+        '5901234123460',
+        '5901234123461',
+    ];
+
+    private const CLOSED_PALLET_EAN = '5901234123462';
 
     private const FOREIGN_EAN = '5909876543210';
 
@@ -86,7 +95,9 @@ class PalletLifecycleTest extends TestCase
             'planned_qty' => 100,
             'packed_qty' => 0,
         ]);
-        WorkOrderEan::create(['work_order_id' => $this->wo->id, 'ean' => self::EAN]);
+        foreach ([...self::EANS, self::CLOSED_PALLET_EAN] as $ean) {
+            WorkOrderEan::create(['work_order_id' => $this->wo->id, 'ean' => $ean]);
+        }
 
         LabelTemplate::create([
             'name' => 'Standard Pallet',
@@ -121,12 +132,12 @@ class PalletLifecycleTest extends TestCase
         $palletNo = Pallet::findOrFail($palletId)->pallet_no;
         $this->assertMatchesRegularExpression('/^PAL-\d{6}$/', $palletNo);
 
-        // Three pieces scanned into it; pallet qty and order packed_qty track.
-        foreach (range(1, 3) as $i) {
+        // Three distinct pieces scanned into it; pallet qty and order packed_qty track.
+        foreach (array_slice(self::EANS, 0, 3) as $index => $ean) {
             $this->actingAs($this->operator)
-                ->postJson(route('packaging.scan'), ['ean' => self::EAN, 'pallet_id' => $palletId])
+                ->postJson(route('packaging.scan'), ['ean' => $ean, 'pallet_id' => $palletId])
                 ->assertOk()
-                ->assertJsonPath('pallet.qty', $i);
+                ->assertJsonPath('pallet.qty', $index + 1);
         }
         $this->assertSame(3, $this->wo->fresh()->packed_qty);
 
@@ -160,11 +171,11 @@ class PalletLifecycleTest extends TestCase
         $this->assertSame($this->line->name, $open[0]['line_name']);
 
         // Resuming = scanning with the same pallet_id; the count keeps growing.
-        foreach ([4, 5] as $expectedQty) {
+        foreach (array_slice(self::EANS, 3, 2) as $index => $ean) {
             $this->actingAs($nextOperator)
-                ->postJson(route('packaging.scan'), ['ean' => self::EAN, 'pallet_id' => $palletId])
+                ->postJson(route('packaging.scan'), ['ean' => $ean, 'pallet_id' => $palletId])
                 ->assertOk()
-                ->assertJsonPath('pallet.qty', $expectedQty);
+                ->assertJsonPath('pallet.qty', $index + 4);
         }
 
         // Every accepted scan was logged against the pallet.
@@ -178,7 +189,7 @@ class PalletLifecycleTest extends TestCase
             ->assertJsonPath('pallet.status', 'closed');
 
         $this->actingAs($nextOperator)
-            ->postJson(route('packaging.scan'), ['ean' => self::EAN, 'pallet_id' => $palletId])
+            ->postJson(route('packaging.scan'), ['ean' => self::CLOSED_PALLET_EAN, 'pallet_id' => $palletId])
             ->assertStatus(422);
         $this->assertSame(5, $this->wo->fresh()->packed_qty);
 

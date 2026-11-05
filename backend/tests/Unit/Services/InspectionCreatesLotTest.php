@@ -9,17 +9,14 @@ use App\Models\MaterialLot;
 use App\Models\MaterialType;
 use App\Models\User;
 use App\Services\Quality\InboundInspectionService;
-use App\Support\InspectionPermissions;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use Spatie\Permission\Models\Permission;
 use Tests\TestCase;
 
 /**
  * When lot tracking is enabled, completing an inspection (pass or fail)
  * should create a MaterialLot row so production can pick from / quarantine
- * the inspected stock — but only when the person completing it holds the
- * disposition right. An inspector without it leaves the lot to the decision.
+ * the inspected stock.
  */
 class InspectionCreatesLotTest extends TestCase
 {
@@ -45,7 +42,6 @@ class InspectionCreatesLotTest extends TestCase
             'stock_quantity' => 0,
         ]);
         $this->inspector = User::factory()->create();
-        $this->inspector->givePermissionTo(Permission::findOrCreate(InspectionPermissions::DISPOSITION, 'web'));
 
         DB::table('system_settings')->updateOrInsert(
             ['key' => 'lot_tracking_enabled'],
@@ -69,7 +65,7 @@ class InspectionCreatesLotTest extends TestCase
         $insp = $this->svc->start($this->material, 'LOT-PASS-1', 250, $plan, $this->inspector);
         $this->svc->recordResult($insp->results->first(), ['value_boolean' => true]);
 
-        $this->svc->complete($insp, null, $this->inspector);
+        $this->svc->complete($insp);
 
         $lot = MaterialLot::firstWhere('inspection_id', $insp->id);
         $this->assertNotNull($lot);
@@ -85,7 +81,7 @@ class InspectionCreatesLotTest extends TestCase
         $insp = $this->svc->start($this->material, 'LOT-FAIL-1', 100, $plan, $this->inspector);
         $this->svc->recordResult($insp->results->first(), ['value_boolean' => false]);
 
-        $this->svc->complete($insp, null, $this->inspector);
+        $this->svc->complete($insp);
 
         $lot = MaterialLot::firstWhere('inspection_id', $insp->id);
         $this->assertNotNull($lot);
@@ -108,7 +104,7 @@ class InspectionCreatesLotTest extends TestCase
         );
         $this->svc->recordResult($insp->results->first(), ['value_boolean' => true]);
 
-        $this->svc->complete($insp, null, $this->inspector);
+        $this->svc->complete($insp);
 
         $lot = MaterialLot::firstWhere('inspection_id', $insp->id);
         $this->assertNotNull($lot);
@@ -126,32 +122,6 @@ class InspectionCreatesLotTest extends TestCase
         $plan = $this->makePlan();
         $insp = $this->svc->start($this->material, 'LOT-OFF', 50, $plan, $this->inspector);
         $this->svc->recordResult($insp->results->first(), ['value_boolean' => true]);
-        $this->svc->complete($insp, null, $this->inspector);
-
-        $this->assertSame(0, MaterialLot::count());
-    }
-
-    public function test_inspector_without_disposition_right_creates_no_lot(): void
-    {
-        $performer = User::factory()->create();
-        $performer->givePermissionTo(Permission::findOrCreate(InspectionPermissions::PERFORM, 'web'));
-
-        $plan = $this->makePlan();
-        $insp = $this->svc->start($this->material, 'LOT-PERF', 40, $plan, $performer);
-        $this->svc->recordResult($insp->results->first(), ['value_boolean' => true]);
-
-        $completed = $this->svc->complete($insp, null, $performer);
-
-        $this->assertSame(Inspection::STATUS_PASS, $completed->status);
-        $this->assertSame(0, MaterialLot::count());
-    }
-
-    public function test_completing_without_a_user_creates_no_lot(): void
-    {
-        $plan = $this->makePlan();
-        $insp = $this->svc->start($this->material, 'LOT-NOBODY', 40, $plan, $this->inspector);
-        $this->svc->recordResult($insp->results->first(), ['value_boolean' => true]);
-
         $this->svc->complete($insp);
 
         $this->assertSame(0, MaterialLot::count());

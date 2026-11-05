@@ -27,6 +27,8 @@ class LabelTemplate extends Model
     /** A received material lot after incoming inspection (the IQC label). */
     const TYPE_MATERIAL_LOT = 'material_lot';
 
+    const TYPE_BOX = 'box';
+
     const TYPES = [
         self::TYPE_WORK_ORDER => 'Work Order',
         self::TYPE_FINISHED_GOODS => 'Finished Goods',
@@ -35,6 +37,7 @@ class LabelTemplate extends Model
         self::TYPE_SERIAL_UNIT => 'Serial Unit (SN)',
         self::TYPE_CARTON => 'Carton (units list)',
         self::TYPE_MATERIAL_LOT => 'Material lot (IQC)',
+        self::TYPE_BOX => 'Packing box',
     ];
 
     const SIZES = [
@@ -55,6 +58,9 @@ class LabelTemplate extends Model
         'wo_number' => 'Work order number',
         'pallet_no' => 'Pallet number',
         'carton_no' => 'Carton number',
+        'box_id' => 'Packing box ID (BOX-…)',
+        'box_position' => 'Box position on pallet (X/Y)',
+        'weight' => 'Weight (kg)',
         'serial_no' => 'Serial number (SN)',
         'psn' => 'Process serial (PSN)',
         'product' => 'Product name',
@@ -174,6 +180,16 @@ class LabelTemplate extends Model
                 'quantity' => true,
                 'status' => true,
                 'supplier_lot' => true,
+                'barcode' => true,
+                'qr' => true,
+                'prod_date' => true,
+            ],
+            self::TYPE_BOX => [
+                'box_id' => true,
+                'box_position' => true,
+                'wo_number' => true,
+                'quantity' => true,
+                'weight' => true,
                 'barcode' => true,
                 'qr' => true,
                 'prod_date' => true,

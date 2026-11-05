@@ -159,6 +159,10 @@ class UnitPackingService
             $byMaterial[(int) $materialId] = $rows;
         }
         try {
+            // Packing is never a CNC step, so the queue preflight (and its
+            // shared-sheet confirmation) does not apply here. A genuinely
+            // merged CNC target would still throw instead of starting shared
+            // work without an operator's confirmation.
             return $this->batches->startStep($step, $operator, $byMaterial);
         } catch (\Throwable $e) {
             throw new BindingException($e->getMessage());
@@ -418,6 +422,9 @@ class UnitPackingService
 
         try {
             if ($step->status === BatchStep::STATUS_READY) {
+                // Packing steps skip the queue preflight; a merged CNC target
+                // would throw and is deliberately caught below instead of
+                // being confirmed silently on the operator's behalf.
                 $step = $this->batches->startStep($step, $operator);
             }
             $this->batches->recordQuantity($step, $operator, 1, 0);

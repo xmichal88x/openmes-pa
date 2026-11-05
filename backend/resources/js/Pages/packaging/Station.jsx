@@ -1,15 +1,18 @@
 // Geist White restyle: light-only v1 — om-* tokens, @openmes/ui controls (scanning logic untouched).
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Head, usePage } from '@inertiajs/react';
-import { Badge, Button, Dropdown, Icon, InlineAlert, Modal, ProgressBar, StatusPill, TextField, useToast } from '@openmes/ui';
+import { Badge, Button, Dropdown, Icon, InlineAlert, Modal, ProgressBar, StatusPill, Tabs, TextField, useToast } from '@openmes/ui';
 import AppDataTable from '../../components/AppDataTable';
 import AppLayout from '../../layouts/AppLayout';
 import OperatorLayout from '../../layouts/OperatorLayout';
 import LabelPreviewModal from '../../components/LabelPreviewModal';
 import useScanBuffer from '../../lib/useScanBuffer';
+import { parseScanPayload } from '../../lib/scanPayload';
 import LabelPrintMenu from '../../components/LabelPrintMenu';
 import { __, formatTime } from '../../lib/i18n';
 import { readParam, writeParams } from '../../lib/urlState';
+import BoxPanel from './BoxPanel';
+import DispatchPanel from './DispatchPanel';
 
 function csrf() {
     const meta = document.querySelector('meta[name="csrf-token"]');
@@ -37,6 +40,16 @@ export default function Station() {
     // Staff get the shift and login line under the title; the operator shell
     // already names the line and the user in its header.
     const staff = (auth?.user?.roles ?? []).some((r) => r === 'Admin' || r === 'Supervisor');
+    // One bench, two jobs: packing (existing EAN/carton flow plus R07 boxes) and
+    // dispatch (outbox rows for DONE work orders).
+    const [mode, setMode] = useState(() => (readParam('mode') === 'dispatch' ? 'dispatch' : 'packing'));
+    const changeMode = useCallback((value) => {
+        setMode(value);
+        writeParams({ mode: value === 'dispatch' ? 'dispatch' : null });
+    }, []);
+    const [activeBox, setActiveBox] = useState(null);
+    const [boxRefresh, setBoxRefresh] = useState(0);
+    const dispatchScanRef = useRef(null);
 
     const [items, setItems] = useState([]);
     const [palletOrders, setPalletOrders] = useState([]); // every packable order, for the pallet picker
@@ -203,6 +216,8 @@ export default function Station() {
     const [manualCode, setManualCode] = useState('');
     const activePalletRef = useRef(null);
     useEffect(() => { activePalletRef.current = activePallet; }, [activePallet]);
+    const activeBoxRef = useRef(null);
+    useEffect(() => { activeBoxRef.current = activeBox; }, [activeBox]);
 
     const realizacja =
         stats.plan > 0 ? Math.min(100, Math.round((stats.today_packed / stats.plan) * 100)) : 0;
@@ -357,7 +372,11 @@ export default function Station() {
 
     const handleScan = useCallback(async (ean) => {
         try {
-            const palletId = activePalletRef.current?.id ?? null;
+            // An open R07 box takes the scanned part; otherwise the serial/EAN
+            // flow keeps using the active pallet.
+            const box = activeBoxRef.current;
+            const boxId = box?.status === 'open' ? box.id : null;
+            const palletId = boxId ? null : (activePalletRef.current?.id ?? null);
             const res = await fetch('/packaging/scan', {
                 method: 'POST',
                 headers: {
@@ -365,7 +384,7 @@ export default function Station() {
                     'X-CSRF-TOKEN': csrf(),
                     'X-Requested-With': 'XMLHttpRequest',
                 },
-                body: JSON.stringify({ ean, pallet_id: palletId }),
+                body: JSON.stringify({ ean, ...(boxId ? { box_id: boxId } : { pallet_id: palletId }) }),
             });
             const data = await res.json();
 
@@ -385,6 +404,7 @@ export default function Station() {
                     scanned_at: formatTime(new Date()),
                 });
                 setFlash('success');
+                if (boxId) setBoxRefresh((n) => n + 1);
                 await Promise.all([fetchItems(), fetchStats(), fetchOpenPallets()]);
                 setHistory((prev) => [
                     { id: Date.now(), ean, product_name: wo.product, scanned_at: formatTime(new Date()) },
@@ -586,11 +606,20 @@ export default function Station() {
     // A reader in `hid` mode types into the page; in `manual` mode the operator
     // types into the field below, so the global listener would only get in the
     // way. Settings → System decides which.
-    useScanBuffer(handleScan, { enabled: scannerMode !== 'manual' });
+    const onRawScan = useCallback((raw) => {
+        const code = parseScanPayload(raw);
+        if (!code) return;
+        if (mode === 'dispatch') {
+            dispatchScanRef.current?.(code);
+            return;
+        }
+        handleScan(code);
+    }, [mode, handleScan]);
+    useScanBuffer(onRawScan, { enabled: scannerMode !== 'manual' });
 
     const submitManualCode = useCallback((e) => {
         e.preventDefault();
-        const code = manualCode.trim();
+        const code = parseScanPayload(manualCode);
         if (! code) return;
         setManualCode('');
         handleScan(code);
@@ -607,7 +636,7 @@ export default function Station() {
     return (
         <>
             <Head title={__('Packing Station')} />
-            <div className="mx-auto max-w-7xl p-6">
+            <div className="w-full px-4 py-5 sm:px-6 sm:py-6">
                 {/* Header */}
                 <div className="mb-5 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
                     <div>
@@ -626,6 +655,17 @@ export default function Station() {
                     <StatusPill status={flash === 'error' ? 'blocked' : 'running'} label={flash === 'error' ? __('Scan error') : flash === 'success' ? __('Scanned!') : scannerMode === 'manual' ? __('Manual entry') : __('Scanning active')} />
                 </div>
 
+                <Tabs
+                    tabs={[{ value: 'packing', label: __('Packing') }, { value: 'dispatch', label: __('Dispatch') }]}
+                    value={mode}
+                    onChange={changeMode}
+                    label={__('Packing station mode')}
+                    panels
+                    className="mb-5"
+                />
+
+                {mode === 'packing' ? (
+                <div id="packing-panel" role="tabpanel" aria-labelledby="packing-tab">
                 {/* KPIs */}
                 <div className="mb-5 grid grid-cols-2 gap-4 lg:grid-cols-4">
                     <Stat label={__('Packed (shift)')} value={stats.today_packed ?? '—'} />
@@ -789,6 +829,15 @@ export default function Station() {
                             </div>
                         )}
                     </Card>}
+                </div>
+
+                <div className="mb-5">
+                    <BoxPanel
+                        orders={palletOrders}
+                        refreshToken={boxRefresh}
+                        onActiveBoxChange={setActiveBox}
+                        toast={toast}
+                    />
                 </div>
 
                 {/* The routing's packing steps for this station: what each order packs
@@ -1028,6 +1077,12 @@ export default function Station() {
                         <AppDataTable data={history} columns={historyColumns} searchable={false} filterable={false} columnToggle={false} paginated emptyLabel={__('No scans this shift')} />
                     </Card>
                 </div>
+                )}
+                </div>
+                ) : (
+                    <div id="dispatch-panel" role="tabpanel" aria-labelledby="dispatch-tab">
+                        <DispatchPanel items={items} scanHandlerRef={dispatchScanRef} toast={toast} />
+                    </div>
                 )}
             </div>
         </>

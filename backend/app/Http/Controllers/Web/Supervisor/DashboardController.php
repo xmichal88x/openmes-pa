@@ -75,7 +75,8 @@ class DashboardController extends Controller
                 ->when($lineId, function ($q) use ($lineId) {
                     $q->whereHas('workOrder', fn ($wo) => $wo->where('line_id', $lineId));
                 })->count(),
-            'blocking_issues' => Issue::blocking()
+            'blocking_issues' => Issue::where('status', 'OPEN')
+                ->whereHas('issueType', fn ($q) => $q->where('is_blocking', true))
                 ->when($lineId, function ($q) use ($lineId) {
                     $q->whereHas('workOrder', fn ($wo) => $wo->where('line_id', $lineId));
                 })->count(),

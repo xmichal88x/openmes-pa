@@ -44,10 +44,8 @@ class WorkOrderManagementController extends Controller
      * Work order list. Rows live-sync via the `work_orders_all` shape; line and
      * product-type name maps + batch counts come as props.
      */
-    public function index(Request $request, CustomFieldService $customFields)
+    public function index(CustomFieldService $customFields)
     {
-        $canCreate = (bool) $request->user()?->can('create', WorkOrder::class);
-
         $counts = WorkOrder::withCount('batches')
             ->get(['id'])
             ->mapWithKeys(fn ($w) => [$w->id => $w->batches_count]);
@@ -61,18 +59,13 @@ class WorkOrderManagementController extends Controller
             'productTypeNames' => ProductType::pluck('name', 'id'),
             'customerNames' => Customer::pluck('name', 'id'),
             // Feeds the list's "New work order" modal, which renders the same form
-            // as the create page — only sent to users who may create.
-            ...($canCreate ? $this->createFormOptions($customFields) : []),
+            // as the create page.
+            ...$this->createFormOptions($customFields),
         ]);
     }
 
     public function create(CustomFieldService $customFields)
     {
-        // The tab gate answers "may you open this section", not "may you create
-        // an order" — that is `create work orders` (WorkOrderPolicy). store() is
-        // covered by StoreWorkOrderRequest::authorize().
-        $this->authorize('create', WorkOrder::class);
-
         return Inertia::render('admin/work-orders/Create', $this->createFormOptions($customFields));
     }
 
@@ -136,7 +129,7 @@ class WorkOrderManagementController extends Controller
             'title' => $i->title,
             'status' => $i->status,
             'issue_type_name' => $i->issueType?->name,
-            'is_blocking' => (bool) $i->blocks_work_order,
+            'is_blocking' => (bool) ($i->issueType?->is_blocking ?? false),
             'reported_at' => $i->reported_at?->toISOString(),
             'reported_by' => $i->reportedBy?->name,
         ])->values();
@@ -207,10 +200,7 @@ class WorkOrderManagementController extends Controller
             ->first();
 
         return Inertia::render('admin/work-orders/Show', [
-            // Only for users who may edit — the drawer is hidden for the rest.
-            'editForm' => Inertia::optional(fn () => auth()->user()?->can('update', $workOrder)
-                ? $this->editFormProps($workOrder, $customFields)
-                : null),
+            'editForm' => Inertia::optional(fn () => $this->editFormProps($workOrder, $customFields)),
             'stops' => $stops,
             'changeRequests' => $changeRequests,
             'changeControl' => [
@@ -432,9 +422,6 @@ class WorkOrderManagementController extends Controller
 
     public function edit(WorkOrder $workOrder, CustomFieldService $customFields)
     {
-        // Same split as create(): update() is covered by UpdateWorkOrderRequest.
-        $this->authorize('update', $workOrder);
-
         return Inertia::render('admin/work-orders/Edit', $this->editFormProps($workOrder, $customFields));
     }
 

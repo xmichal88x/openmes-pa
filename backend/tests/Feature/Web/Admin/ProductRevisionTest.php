@@ -26,9 +26,8 @@ class ProductRevisionTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        // Real role permissions: the work-order integration tests create/edit
-        // orders, which needs `create`/`edit work orders`.
-        $this->seed(\Database\Seeders\RolesAndPermissionsSeeder::class);
+        Role::findOrCreate('Admin', 'web');
+        Role::findOrCreate('Operator', 'web');
         $this->admin = User::factory()->create();
         $this->admin->assignRole('Admin');
     }

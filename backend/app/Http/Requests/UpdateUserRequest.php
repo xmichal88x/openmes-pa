@@ -33,12 +33,6 @@ class UpdateUserRequest extends StoreUserRequest
         return Rule::unique('workers', 'code')->ignore($this->currentUser()?->worker_id);
     }
 
-    /** Re-submitting the worker this account already holds is not a conflict. */
-    protected function workerAccountUniqueness(): mixed
-    {
-        return Rule::unique('users', 'worker_id')->whereNull('deleted_at')->ignore($this->currentUser()?->id);
-    }
-
     /** Left blank, the existing password stands. */
     protected function passwordRules(): array
     {

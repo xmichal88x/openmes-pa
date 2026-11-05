@@ -3,7 +3,6 @@
 namespace App\Http\Requests\Web\Admin;
 
 use App\Http\Requests\Concerns\MergesCustomFieldRules;
-use App\Models\WorkOrder;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -11,15 +10,9 @@ class StoreWorkOrderRequest extends FormRequest
 {
     use MergesCustomFieldRules;
 
-    /**
-     * The section gate (tab:orders on /admin, the Supervisor role on
-     * /supervisor) only answers "may you open the list"; creating needs the
-     * `create work orders` ability (WorkOrderPolicy). Checked here so the 403
-     * comes before validation — no order_no uniqueness probing without it.
-     */
     public function authorize(): bool
     {
-        return $this->user()?->can('create', WorkOrder::class) ?? false;
+        return true;
     }
 
     protected function customFieldEntityType(): string
@@ -56,7 +49,7 @@ class StoreWorkOrderRequest extends FormRequest
             ],
             'planned_qty' => ['required', 'numeric', 'min:0.01', 'max:99999999'],
             'unit_price' => ['nullable', 'numeric', 'min:0', 'max:99999999'],
-            'counting_source' => ['nullable', Rule::in(WorkOrder::COUNTING_SOURCES)],
+            'counting_source' => ['nullable', Rule::in(\App\Models\WorkOrder::COUNTING_SOURCES)],
             'priority' => ['nullable', 'integer', 'min:0', 'max:100'],
             'due_date' => ['nullable', 'date'],
             'planned_start_at' => ['nullable', 'date'],

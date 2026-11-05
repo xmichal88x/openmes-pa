@@ -6,6 +6,7 @@ use App\Models\Batch;
 use App\Models\BatchStep;
 use App\Models\LabelTemplate;
 use App\Models\MaterialLot;
+use App\Models\PackagingBox;
 use App\Models\Pallet;
 use App\Models\SerialUnit;
 use App\Models\UnitCarton;
@@ -107,6 +108,20 @@ class LabelGenerator
         return $this->renderPdf('packaging.pdf.labels.carton', $labels, $template);
     }
 
+    public function pdfForBoxes(Collection $boxes, LabelTemplate $template)
+    {
+        $labels = $boxes->map(fn (PackagingBox $box) => $this->labelDataForBox($box, $template))->all();
+
+        return $this->renderPdf('packaging.pdf.labels.box', $labels, $template);
+    }
+
+    public function zplForBoxes(Collection $boxes, LabelTemplate $template): string
+    {
+        return $boxes
+            ->map(fn (PackagingBox $box) => $this->zplLabel($this->labelDataForBox($box, $template), $template))
+            ->implode("\n");
+    }
+
     /**
      * The template on sample data, for checking a layout before anything real
      * exists to print. Every field the template can show gets a plausible
@@ -133,6 +148,9 @@ class LabelGenerator
             LabelTemplate::TYPE_MATERIAL_LOT => ['packaging.pdf.labels.material-lot',
                 ['lot' => 'LOT-000001', 'material' => 'MAT-001 · '.__('Sample material'), 'quantity' => '500 pcs', 'status' => __('IQC: released').' · '.$today, 'supplier_lot' => __('Supplier lot: :lot', ['lot' => 'SUP-4711']), 'prod_date' => $today],
                 'LOT-000001', 'LOT-000001', []],
+            LabelTemplate::TYPE_BOX => ['packaging.pdf.labels.box',
+                ['box_id' => 'BOX-WO-000001-1', 'box_position' => __('Box :box of :of', ['box' => 1, 'of' => 4]), 'wo_number' => 'WO-000001', 'product' => __('Sample product'), 'quantity' => __(':count pcs', ['count' => 12]), 'weight' => '2.4 kg', 'prod_date' => $today],
+                'BOX-WO-000001-1', json_encode(['box_id' => 'BOX-WO-000001-1', 'order' => 'WO-000001', 'box' => 1, 'of' => 4, 'parts' => 12, 'weight_kg' => 2.4]), []],
             LabelTemplate::TYPE_PALLET => ['packaging.pdf.labels.pallet',
                 ['pallet_no' => 'PAL-000001', 'wo_number' => 'WO-000001', 'product' => __('Sample product'), 'quantity' => '48 pcs', 'location' => 'DOCK-1', 'lot' => 'LOT-000001', 'prod_date' => $today],
                 'PAL-000034', 'PAL-000034', []],
@@ -183,6 +201,52 @@ class LabelGenerator
             'qr_value' => $carton->carton_no,
             'barcode_png' => $template->hasField('barcode') ? $this->barcodePng($carton->carton_no, $template->barcode_format) : null,
             'qr_png' => $template->hasField('qr') ? $this->qrPng($carton->carton_no) : null,
+        ];
+    }
+
+    private function labelDataForBox(PackagingBox $box, LabelTemplate $template): array
+    {
+        $box->loadMissing('workOrder.productType', 'pallet:id,pallet_no');
+        $wo = $box->workOrder;
+
+        $boxesOnPallet = 0;
+        $boxPosition = null;
+
+        if ($box->pallet_id !== null) {
+            $boxIds = PackagingBox::where('pallet_id', $box->pallet_id)
+                ->where('status', '!=', PackagingBox::STATUS_VOID)
+                ->orderBy('box_no')
+                ->orderBy('id')
+                ->pluck('id');
+            $boxesOnPallet = $boxIds->count();
+            $index = $boxIds->search($box->id);
+            $boxPosition = $index === false ? null : $index + 1;
+        }
+
+        $weight = $box->weight_kg !== null ? $this->formatQty($box->weight_kg) : null;
+        $qrValue = json_encode([
+            'box_id' => $box->box_id,
+            'order' => $wo?->order_no,
+            'box' => (int) $box->box_no,
+            'of' => $boxPosition !== null ? $boxesOnPallet : null,
+            'parts' => (int) $box->part_count,
+            'weight_kg' => $box->weight_kg !== null ? (float) $box->weight_kg : null,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return [
+            'fields' => [
+                'box_id' => $box->box_id,
+                'box_position' => $boxPosition !== null ? __('Box :box of :of', ['box' => $boxPosition, 'of' => $boxesOnPallet]) : null,
+                'wo_number' => $wo?->order_no,
+                'product' => $wo?->productType?->name,
+                'quantity' => __(':count pcs', ['count' => (int) $box->part_count]),
+                'weight' => $weight !== null ? $weight.' kg' : null,
+                'prod_date' => ($box->closed_at ?? $box->created_at)?->format('Y-m-d'),
+            ],
+            'barcode_value' => $box->box_id,
+            'qr_value' => $qrValue,
+            'barcode_png' => $template->hasField('barcode') ? $this->barcodePng($box->box_id, $template->barcode_format) : null,
+            'qr_png' => $template->hasField('qr') ? $this->qrPng($qrValue) : null,
         ];
     }
 
@@ -432,9 +496,17 @@ class LabelGenerator
             $zpl .= "^FO20,{$y}^A0N,32,32^FD".$this->zplEscape($fields['pallet_no'])."^FS\n";
             $y += $lineHeight + 4;
         }
+        if ($template->hasField('box_id') && ! empty($fields['box_id'])) {
+            $zpl .= "^FO20,{$y}^A0N,30,30^FD".$this->zplEscape($fields['box_id'])."^FS\n";
+            $y += $lineHeight + 4;
+        }
         if ($template->hasField('serial_no') && ! empty($fields['serial_no'])) {
             $zpl .= "^FO20,{$y}^A0N,32,32^FD".$this->zplEscape($fields['serial_no'])."^FS\n";
             $y += $lineHeight + 4;
+        }
+        if ($template->hasField('box_position') && ! empty($fields['box_position'])) {
+            $zpl .= "^FO20,{$y}^A0N,22,22^FD".$this->zplEscape($fields['box_position'])."^FS\n";
+            $y += $lineHeight;
         }
         if ($template->hasField('psn') && ! empty($fields['psn'])) {
             $zpl .= "^FO20,{$y}^A0N,20,20^FDPSN: ".$this->zplEscape($fields['psn'])."^FS\n";
@@ -452,7 +524,7 @@ class LabelGenerator
             $zpl .= "^FO20,{$y}^A0N,22,22^FDQty: ".$this->zplEscape($fields['quantity'])."^FS\n";
             $y += $lineHeight;
         }
-        foreach (['material' => 22, 'status' => 22, 'supplier_lot' => 20] as $key => $size) {
+        foreach (['weight' => 22, 'material' => 22, 'status' => 22, 'supplier_lot' => 20] as $key => $size) {
             if ($template->hasField($key) && ! empty($fields[$key])) {
                 $zpl .= "^FO20,{$y}^A0N,{$size},{$size}^FD".$this->zplEscape($fields[$key])."^FS\n";
                 $y += $lineHeight;

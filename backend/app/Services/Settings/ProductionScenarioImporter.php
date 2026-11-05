@@ -143,6 +143,12 @@ class ProductionScenarioImporter
             'work_order' => $this->createWorkOrder($e),
             'batch' => $this->createBatch($e),
             'schedule' => $this->schedule($e),
+            // System path: no operator is present to confirm a shared sheet.
+            // Non-CNC steps start normally (the queue preflight is skipped),
+            // but a CNC step that is a merged target makes startStep() throw
+            // StartConfirmationRequiredException and the import fails loudly
+            // rather than starting shared work silently. Scenarios that need
+            // that must be replayed explicitly with confirmSharedSheet=true.
             'step_start' => $this->batches->startStep($this->batchStep($e), $this->user($e)),
             'step_log' => $this->batches->recordQuantity($this->batchStep($e), $this->user($e), (float) ($e['good'] ?? 0), (float) ($e['scrap'] ?? 0), $e['note'] ?? null),
             'step_complete' => $this->batches->completeStep($this->batchStep($e), $this->user($e)),

@@ -2,10 +2,7 @@
 
 namespace App\Services;
 
-use App\Enums\IssueDisposition;
 use App\Models\Issue;
-use App\Models\ScrapEntry;
-use App\Models\Shift;
 use App\Models\WorkOrder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -25,77 +22,21 @@ class IssueService
             // Create the issue
             $issue = Issue::create($data);
 
+            // Load the issue type to check if it's blocking
+            $issue->load('issueType');
+
             // If this is a blocking issue, block the work order
-            if ($issue->blocks_work_order) {
+            if ($issue->issueType->is_blocking) {
                 $this->blockWorkOrder($issue->work_order_id);
             }
 
             Log::info('Issue created', [
                 'issue_id' => $issue->id,
                 'work_order_id' => $issue->work_order_id,
-                'is_blocking' => $issue->blocks_work_order,
+                'is_blocking' => $issue->issueType->is_blocking,
             ]);
 
             return $issue->load(['issueType', 'reportedBy', 'workOrder', 'batchStep']);
-        });
-    }
-
-    /**
-     * File an issue whose effect on production was chosen by the reporter
-     * (the Issues page) rather than taken from its type: it either blocks the
-     * work order, or records scrap against it, or neither.
-     *
-     * @param  array{scrap_reason_id: int, quantity: float|string}|null  $scrap  set when the effect is scrap
-     */
-    public function reportWithEffect(array $data, bool $blocksWorkOrder, ?array $scrap, int $userId): Issue
-    {
-        if ($blocksWorkOrder && $scrap !== null) {
-            throw new \InvalidArgumentException('An issue either blocks its work order or records scrap, not both.');
-        }
-
-        return DB::transaction(function () use ($data, $blocksWorkOrder, $scrap, $userId) {
-            $issue = Issue::create([
-                ...$data,
-                'blocks_work_order' => $blocksWorkOrder,
-                'status' => Issue::STATUS_OPEN,
-                'reported_by_id' => $userId,
-                'reported_at' => now(),
-            ]);
-
-            if ($blocksWorkOrder) {
-                $this->blockWorkOrder($issue->work_order_id);
-            }
-
-            if ($scrap !== null) {
-                ScrapEntry::create([
-                    'work_order_id' => $issue->work_order_id,
-                    'issue_id' => $issue->id,
-                    'scrap_reason_id' => $scrap['scrap_reason_id'],
-                    'quantity' => $scrap['quantity'],
-                    'shift_id' => Shift::current($issue->workOrder->line_id)?->id,
-                    'notes' => $issue->title,
-                    'reported_by' => $userId,
-                    'reported_at' => now(),
-                ]);
-
-                // The material is already written off, so the non-conformance
-                // decision is made: no separate disposition step is needed.
-                $issue->update([
-                    'disposition' => IssueDisposition::Scrap->value,
-                    'non_conforming_qty' => $scrap['quantity'],
-                    'disposition_by_id' => $userId,
-                    'disposition_at' => now(),
-                ]);
-            }
-
-            Log::info('Issue created', [
-                'issue_id' => $issue->id,
-                'work_order_id' => $issue->work_order_id,
-                'is_blocking' => $blocksWorkOrder,
-                'scrap_qty' => $scrap['quantity'] ?? null,
-            ]);
-
-            return $issue;
         });
     }
 
@@ -141,7 +82,7 @@ class IssueService
             ]);
 
             // If this was a blocking issue, check if we should unblock the work order
-            if ($issue->blocks_work_order) {
+            if ($issue->issueType->is_blocking) {
                 $this->checkAndUnblockWorkOrder($issue->work_order_id);
             }
 
@@ -211,19 +152,15 @@ class IssueService
     }
 
     /**
-     * Block a work order, remembering the status the block replaces so
-     * unblocking can put it back.
+     * Block a work order.
      */
-    public function blockWorkOrder(int $workOrderId): void
+    protected function blockWorkOrder(int $workOrderId): void
     {
         $workOrder = WorkOrder::findOrFail($workOrderId);
 
-        // Already blocked, finished, or held by a stop of its own: leave it.
-        if (in_array($workOrder->status, WorkOrder::BLOCKABLE_STATUSES, true)) {
-            $workOrder->update([
-                'status_before_block' => $workOrder->status,
-                'status' => WorkOrder::STATUS_BLOCKED,
-            ]);
+        // Only block if not already blocked or done
+        if (! in_array($workOrder->status, [WorkOrder::STATUS_BLOCKED, WorkOrder::STATUS_DONE, WorkOrder::STATUS_CANCELLED])) {
+            $workOrder->update(['status' => WorkOrder::STATUS_BLOCKED]);
 
             Log::info('Work order blocked due to issue', [
                 'work_order_id' => $workOrderId,
@@ -234,7 +171,7 @@ class IssueService
     /**
      * Check if work order should be unblocked (no more blocking issues).
      */
-    public function checkAndUnblockWorkOrder(int $workOrderId): void
+    protected function checkAndUnblockWorkOrder(int $workOrderId): void
     {
         $workOrder = WorkOrder::findOrFail($workOrderId);
 
@@ -249,18 +186,17 @@ class IssueService
             ->exists();
 
         if (! $hasBlockingIssues) {
-            // Put back what the block replaced. Orders blocked before that was
-            // recorded fall back to guessing from the batches: IN_PROGRESS when
-            // one is running, otherwise PENDING.
-            $newStatus = $workOrder->status_before_block
-                ?? ($workOrder->batches()->where('status', 'IN_PROGRESS')->exists()
-                    ? WorkOrder::STATUS_IN_PROGRESS
-                    : WorkOrder::STATUS_PENDING);
+            // Determine the appropriate status to restore
+            // If there are in-progress batches, set to IN_PROGRESS, otherwise PENDING
+            $hasBatchesInProgress = $workOrder->batches()
+                ->where('status', 'IN_PROGRESS')
+                ->exists();
 
-            $workOrder->update([
-                'status' => $newStatus,
-                'status_before_block' => null,
-            ]);
+            $newStatus = $hasBatchesInProgress
+                ? WorkOrder::STATUS_IN_PROGRESS
+                : WorkOrder::STATUS_PENDING;
+
+            $workOrder->update(['status' => $newStatus]);
 
             Log::info('Work order unblocked', [
                 'work_order_id' => $workOrderId,

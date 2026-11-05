@@ -1614,16 +1614,13 @@ class PanelFurnitureDemoSeeder extends Seeder
                 continue;
             }
 
-            // Published, so the plan is offered when an inspection of the
-            // material starts (InspectionPlan::applicableTo skips drafts).
             InspectionPlan::updateOrCreate(
                 ['name' => $def['name']],
                 [
                     'description' => $def['description'],
                     'material_id' => $material->id,
-                    'criteria' => InspectionPlan::normalizeCriteria($def['criteria']),
+                    'criteria' => $def['criteria'],
                     'is_active' => true,
-                    'published_at' => now(),
                 ]
             );
         }

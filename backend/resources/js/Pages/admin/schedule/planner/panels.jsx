@@ -175,8 +175,6 @@ export function BacklogRail({ ctx }) {
     // otherwise it renders for everyone and 403s on click. Mirrors hrEnabled
     // in the header above.
     const canImport = (usePage().props?.auth?.user?.accessibleTabs ?? []).includes('import');
-    // Same for creating: `create work orders` (WorkOrderPolicy), not the tab.
-    const canCreate = !!usePage().props?.auth?.user?.can?.createWorkOrders;
     const [q, setQ] = useState('');
     const [pf, setPf] = useState('all');
     const [tab, setTab] = useState('backlog');
@@ -200,9 +198,7 @@ export function BacklogRail({ ctx }) {
                 <SegmentedControl label={__('Backlog')} className="w-full sm:w-[280px] shrink-0" value={tab} onChange={setTab}
                     options={[{ value: 'backlog', label: `${__('Backlog')} · ${data.backlog.length}` }, { value: 'changes', label: __('Changes') }]} />
             <div className="flex gap-2 sm:ml-auto">
-                {canCreate && (
-                    <Button size="sm" onClick={() => setShowNew(true)} className="whitespace-nowrap" leftIcon={<Icon name="plus" size={14} />}>{__('New order')}</Button>
-                )}
+                <Button size="sm" onClick={() => setShowNew(true)} className="whitespace-nowrap" leftIcon={<Icon name="plus" size={14} />}>{__('New order')}</Button>
                 {canImport && (
                     <Link href="/admin/import/work-orders" className="whitespace-nowrap inline-flex items-center justify-center gap-2 hover:bg-om-chip" style={{ padding: '8px', borderRadius: 8, fontSize: 12, fontWeight: 500, background: 'var(--om-card)', color: 'var(--om-muted)', border: '1px solid var(--om-line)' }}><Icon name="upload" size={14} />{__('Import CSV')}</Link>
                 )}
@@ -263,7 +259,7 @@ export function BacklogRail({ ctx }) {
                 ))}
             </div>
             )}
-            {canCreate && showNew && <NewOrderModal ctx={ctx} onClose={() => setShowNew(false)} />}
+            {showNew && <NewOrderModal ctx={ctx} onClose={() => setShowNew(false)} />}
         </div>
     );
 }

@@ -96,10 +96,8 @@ export default function AdminWorkOrderShow() {
         workOrder, customFields = [], editForm,
         // Change control (#182) and materials reconciliation (#99).
         stops = [], changeRequests = [], changeControl = {},
-        canReclassify = false, materials = [], allocations = [], auth,
+        canReclassify = false, materials = [], allocations = [],
     } = usePage().props;
-    // UX only — UpdateWorkOrderRequest enforces `edit work orders`.
-    const canEdit = !!auth?.user?.can?.editWorkOrders;
     const drawer = useResourceDrawer();
     const { confirm, dialog } = useConfirm();
     const { prompt, dialog: promptDialog } = usePrompt();
@@ -173,7 +171,7 @@ export default function AdminWorkOrderShow() {
             <div className="w-full min-w-0 px-4 py-5 sm:px-6 sm:py-6">
                 <Header
                     workOrder={workOrder}
-                    onEdit={canEdit ? () => drawer.edit(workOrder) : null}
+                    onEdit={() => drawer.edit(workOrder)}
                     status={status}
                     isTerminal={isTerminal}
                     isDuePast={isDuePast}
@@ -290,11 +288,9 @@ function Header({
                     <Icon name="arrow-left" size={14} />
                     {__('Back')}
                 </Link>
-                {onEdit && (
-                    <Button variant="outline" onClick={onEdit} leftIcon={<Icon name="pencil" size={14} />}>
-                        {__('Edit')}
-                    </Button>
-                )}
+                <Button variant="outline" onClick={onEdit} leftIcon={<Icon name="pencil" size={14} />}>
+                    {__('Edit')}
+                </Button>
 
                 {status === 'PENDING' && (
                     <Button variant="ghost" onClick={() => confirm({ title: __('Reject this work order?') }, () => post('reject'))}>

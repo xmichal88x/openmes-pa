@@ -5,8 +5,8 @@ namespace Tests\Feature\Web\Admin;
 use App\Models\ProductType;
 use App\Models\User;
 use App\Models\WorkOrder;
-use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
 /** A work order's numbers have a floor: no negative quantity, price or priority reaches the database. */
@@ -19,8 +19,7 @@ class WorkOrderQuantityValidationTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        // Real role permissions: creating/editing needs `create`/`edit work orders`.
-        $this->seed(RolesAndPermissionsSeeder::class);
+        Role::findOrCreate('Admin', 'web');
         $this->admin = User::factory()->create();
         $this->admin->assignRole('Admin');
     }
