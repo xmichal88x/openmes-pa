@@ -189,11 +189,13 @@ jobs:
                 for tag in "${tag_arr[@]}"; do
                   [[ "${tag}" == "${TMP_TAG}" ]] && has_tmp=1
                   [[ "${tag}" == "latest" ]] && has_latest=1
-                  for protected in "${PROTECTED_TAGS[@]}"; do
-                    [[ "${tag}" == "${protected}" ]] && fail "version ${id} carries protected tag ${protected}; refusing to delete"
-                  done
                 done
                 if (( has_tmp == 1 && has_latest == 1 )); then
+                  for tag in "${tag_arr[@]}"; do
+                    for protected in "${PROTECTED_TAGS[@]}"; do
+                      [[ "${tag}" == "${protected}" ]] && fail "candidate version ${id} carries protected tag ${protected}; refusing to delete"
+                    done
+                  done
                   [[ "${name}" == "${tmp_digest}" ]] || fail "candidate version ${id} digest ${name} != temp ${tmp_digest}"
                   [[ -n "${target_id}" && "${target_id}" != "${id}" ]] && fail "multiple candidate versions: ${target_id}, ${id}"
                   target_id="${id}"
