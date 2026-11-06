@@ -247,7 +247,7 @@ jobs:
             "pa-0.28.0-20261105:${PROD_DIGEST}" \
             "sha-8e175db:${PROD_DIGEST}"; do
             tag="${pair%%:*}"
-            want="${pair##*:}"
+            want="${pair#*:}"
             got="$(anon_digest "${tag}")" || fail "anonymous manifest request failed for ${tag}"
             [[ "${got}" == "${want}" ]] || fail "anonymous ${tag} -> ${got:-MISSING}, expected ${want}"
             echo "  anonymous ${tag} -> ${got}"
