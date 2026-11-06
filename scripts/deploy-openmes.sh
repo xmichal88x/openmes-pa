@@ -40,12 +40,13 @@
 #   OPENMES_ENABLE_QUEUE=0|1                         (default: 0)
 #   OPENMES_ENABLE_MQTT=0|1                          (default: 0)
 #   OPENMES_ENABLE_MODBUS=0|1                        (default: 0)
-#   APP_SOURCE_URL=...                               (default: image revision label)
+#   OPENMES_SOURCE_URL_OVERRIDE=...                  (optional AGPL link override)
 #
 # AGPL §13 provenance: after the image is available locally the script reads
-# org.opencontainers.image.revision and exports APP_SOURCE_URL to
+# org.opencontainers.image.revision and always exports APP_SOURCE_URL to
 # https://github.com/xmichal88x/openmes-pa/tree/<revision>. A missing/empty
-# label aborts the deploy. An explicitly provided APP_SOURCE_URL is kept.
+# label aborts the deploy. APP_SOURCE_URL is a result, never an input: use
+# OPENMES_SOURCE_URL_OVERRIDE only if the image label itself is wrong.
 
 set -Eeuo pipefail
 
@@ -68,7 +69,7 @@ usage() {
         '  OPENMES_ENABLE_QUEUE  0|1 (default: 0, or keep an existing container)' \
         '  OPENMES_ENABLE_MQTT   0|1 (default: 0, or keep an existing container)' \
         '  OPENMES_ENABLE_MODBUS 0|1 (default: 0, opt-in only)' \
-        '  APP_SOURCE_URL        AGPL source link (default: image revision label)' \
+        '  OPENMES_SOURCE_URL_OVERRIDE  AGPL source link override (optional)' \
         '' \
         'Always deployed: backend reverb. See the header for details.'
 }
@@ -277,11 +278,17 @@ fi
 # 4. AGPL §13 provenance. The source link shown in the UI must point at the
 #    exact commit that produced this image, never a mutable branch. A missing
 #    revision label aborts the deploy (fail closed: no provenance, no deploy).
+#    APP_SOURCE_URL is derived here on every deploy; OPENMES_SOURCE_URL_OVERRIDE
+#    is the only override, so a stale .env value cannot pin an old revision.
 REV="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$OPENMES_IMAGE" 2>/dev/null || true)"
 if [[ -z "$REV" || "$REV" == "<no value>" ]]; then
     die "image $OPENMES_IMAGE has no org.opencontainers.image.revision label — refusing deploy without provenance"
 fi
-export APP_SOURCE_URL="${APP_SOURCE_URL:-https://github.com/xmichal88x/openmes-pa/tree/$REV}"
+if [[ -n "${OPENMES_SOURCE_URL_OVERRIDE:-}" ]]; then
+    export APP_SOURCE_URL="$OPENMES_SOURCE_URL_OVERRIDE"
+else
+    export APP_SOURCE_URL="https://github.com/xmichal88x/openmes-pa/tree/$REV"
+fi
 log "AGPL source URL: $APP_SOURCE_URL"
 
 # 5. Backend first. It runs config:cache against the shared bootstrap cache

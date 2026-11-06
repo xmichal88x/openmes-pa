@@ -41,9 +41,6 @@ services:
     # pull_policy defaults to `never`: fetch explicitly with the deploy script,
     # so a plain `docker compose up` can never silently run a different build.
     pull_policy: ${OPENMES_PULL_POLICY:-never}
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
     container_name: ${OPENMES_NAME_PREFIX:-openmmes}-backend
     environment:
       APP_NAME: ${APP_NAME:-OpenMES}
@@ -60,9 +57,9 @@ services:
       APP_KEY: ${APP_KEY}
       APP_URL: ${APP_URL:-http://localhost}
       # AGPL §13 corresponding source, rendered by the UI (components/SourceLink).
-      # Set by scripts/deploy-openmes.sh from the image revision label; an explicit
-      # value here is preserved as an override. Empty means "use the app default".
-      APP_SOURCE_URL: ${APP_SOURCE_URL:-}
+      # Set by scripts/deploy-openmes.sh from the image revision label. The
+      # fallback keeps the link present outside that script.
+      APP_SOURCE_URL: ${APP_SOURCE_URL:-https://github.com/xmichal88x/openmes-pa/tree/pa/0.28}
       # Sanctum SPA stateful hosts. Empty by default (production derives them
       # from APP_URL). Set this when serving on a host:port the app URL doesn't
       # cover — e.g. localhost:8084 or a LAN IP — or the live-sync /api
@@ -123,9 +120,6 @@ services:
     # pull_policy defaults to `never`: fetch explicitly with the deploy script,
     # so a plain `docker compose up` can never silently run a different build.
     pull_policy: ${OPENMES_PULL_POLICY:-never}
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
     container_name: ${OPENMES_NAME_PREFIX:-openmmes}-reverb
     command: php artisan reverb:start --host=0.0.0.0 --port=8080
     environment:
@@ -137,7 +131,7 @@ services:
       APP_TIMEZONE: ${APP_TIMEZONE:-UTC}
       APP_KEY: ${APP_KEY}
       # AGPL §13 source URL; deploy-openmes.sh pins it to the image revision.
-      APP_SOURCE_URL: ${APP_SOURCE_URL:-}
+      APP_SOURCE_URL: ${APP_SOURCE_URL:-https://github.com/xmichal88x/openmes-pa/tree/pa/0.28}
       DB_CONNECTION: pgsql
       DB_HOST: postgres
       DB_PORT: 5432
@@ -172,9 +166,6 @@ services:
     # pull_policy defaults to `never`: fetch explicitly with the deploy script,
     # so a plain `docker compose up` can never silently run a different build.
     pull_policy: ${OPENMES_PULL_POLICY:-never}
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
     container_name: ${OPENMES_NAME_PREFIX:-openmmes}-mqtt-listener
     command:
       ["php", "artisan", "mqtt:listen"]
@@ -186,7 +177,7 @@ services:
       APP_TIMEZONE: ${APP_TIMEZONE:-UTC}
       APP_KEY: ${APP_KEY}
       # AGPL §13 source URL; deploy-openmes.sh pins it to the image revision.
-      APP_SOURCE_URL: ${APP_SOURCE_URL:-}
+      APP_SOURCE_URL: ${APP_SOURCE_URL:-https://github.com/xmichal88x/openmes-pa/tree/pa/0.28}
       DB_CONNECTION: pgsql
       DB_HOST: postgres
       DB_PORT: 5432
@@ -225,9 +216,6 @@ services:
     # pull_policy defaults to `never`: fetch explicitly with the deploy script,
     # so a plain `docker compose up` can never silently run a different build.
     pull_policy: ${OPENMES_PULL_POLICY:-never}
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
     container_name: ${OPENMES_NAME_PREFIX:-openmmes}-modbus-poller
     command:
       ["php", "artisan", "modbus:poll", "--connection=${MODBUS_CONNECTION_ID:-1}"]
@@ -239,7 +227,7 @@ services:
       APP_TIMEZONE: ${APP_TIMEZONE:-UTC}
       APP_KEY: ${APP_KEY}
       # AGPL §13 source URL; deploy-openmes.sh pins it to the image revision.
-      APP_SOURCE_URL: ${APP_SOURCE_URL:-}
+      APP_SOURCE_URL: ${APP_SOURCE_URL:-https://github.com/xmichal88x/openmes-pa/tree/pa/0.28}
       DB_CONNECTION: pgsql
       DB_HOST: postgres
       DB_PORT: 5432
@@ -304,9 +292,6 @@ services:
     # pull_policy defaults to `never`: fetch explicitly with the deploy script,
     # so a plain `docker compose up` can never silently run a different build.
     pull_policy: ${OPENMES_PULL_POLICY:-never}
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
     container_name: ${OPENMES_NAME_PREFIX:-openmmes}-queue-worker
     command: ["php", "artisan", "queue:work", "--sleep=1", "--tries=5", "--timeout=120"]
     environment:
@@ -317,7 +302,7 @@ services:
       APP_TIMEZONE: ${APP_TIMEZONE:-UTC}
       APP_KEY: ${APP_KEY}
       # AGPL §13 source URL; deploy-openmes.sh pins it to the image revision.
-      APP_SOURCE_URL: ${APP_SOURCE_URL:-}
+      APP_SOURCE_URL: ${APP_SOURCE_URL:-https://github.com/xmichal88x/openmes-pa/tree/pa/0.28}
       QUEUE_CONNECTION: ${QUEUE_CONNECTION:-database}
       DB_CONNECTION: pgsql
       DB_HOST: postgres
