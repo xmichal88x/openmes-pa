@@ -131,6 +131,35 @@ Weryfikacja compose (bez sekretów):
 OPENMES_IMAGE=ghcr.io/xmichal88x/openmes-pa@sha256:<64 hex> docker compose config -q
 ```
 
+## Production deployment 2026-11-06
+
+Wdrożenie 0.28 na produkcję z obrazu CI, pinowanego digestem (bez mutable tagów).
+
+| Element | Wartość |
+|---|---|
+| Obraz | `ghcr.io/xmichal88x/openmes-pa@sha256:997dddf7b95c51faa55f893d67ca8fc19d92d42403a1b4ed98fcc91f7b8c9573` |
+| Tag | `pa-0.28.0-20261105` |
+| Revision (label) | `8e175dbf4a2409cbd77ef0de1e1409bc06d356fc` |
+| Image ID | `30d40a94cf4a` |
+
+- **Deploy:** `scripts/deploy-openmes.sh` — wyłącznie digest (`repo@sha256:<64 hex>`),
+  **backend-first** (start backendu i `/api/health` = 200 przed sidecarami),
+  **sidecary warunkowe** (jawnie wskazane usługi; nieuruchamiane boczne usługi nie
+  startują przypadkiem), **modbus opt-in** (`OPENMES_ENABLE_MODBUS=1`, domyślnie 0),
+  `APP_SOURCE_URL` wyprowadzony z labela `org.opencontainers.image.revision`
+  (brak labela = deploy przerwany, fail-closed).
+- **Baza:** 299 migracji, 0 pending.
+- **Aplikacja:** 1181 tras, 5 modułów, `/api/health` = 200, panel = 302,
+  webhook = 201.
+- **Backup:** `/root/backups/openmes-028-20261105T231924Z`; SHA-256 dumpa
+  `a258a611cf3a2b40baa9208f976feef8a8a5552a79ceb75024eaceb3553e34c9`.
+- **Rollback:** obraz `r24ci` / digest `387c` + restore dumpa; test na staging
+  **PASS**.
+- **AGPL:** `APP_SOURCE_URL` wskazuje dokładny commit `8e175dbf...`
+  (`https://github.com/xmichal88x/openmes-pa/tree/8e175dbf4a2409cbd77ef0de1e1409bc06d356fc`).
+- **GHCR:** tag `latest` usunięty; pozostałe tagi rollback/prod jak wyżej
+  (`pa-0.28.0-20261105`).
+
 ## AGPL — obowiązek udostępnienia źródła
 
 Rdzeń OpenMES jest na licencji **AGPL-3.0-only** (`LICENSE`). Wszystkie modyfikacje
