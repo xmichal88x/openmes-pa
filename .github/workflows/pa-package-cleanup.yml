@@ -138,10 +138,14 @@ jobs:
             if [[ -z "${tmp_digest}" ]]; then
               log "Creating temp version via crane mutate (new digest, tag ${TMP_TAG})"
               stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-              crane mutate --platform=linux/amd64 \
+              amd64_digest="$(crane digest --platform=linux/amd64 "${IMAGE}@${ROLLBACK_DIGEST}" 2>/dev/null)" \
+                || fail "cannot resolve linux/amd64 manifest for rollback digest"
+              [[ -n "${amd64_digest}" ]] || fail "empty linux/amd64 manifest digest"
+              log "Source linux/amd64 manifest: ${amd64_digest}"
+              crane mutate \
                 --annotation "org.opencontainers.image.cleanup.reason=remove-stale-latest" \
                 --annotation "org.opencontainers.image.cleanup.timestamp=${stamp}" \
-                -t "${IMAGE}:${TMP_TAG}" "${IMAGE}@${ROLLBACK_DIGEST}" \
+                -t "${IMAGE}:${TMP_TAG}" "${IMAGE}@${amd64_digest}" \
                 || fail "crane mutate failed"
               tmp_digest="$(digest_of "${TMP_TAG}")"
               [[ -n "${tmp_digest}" ]] || fail "temp tag ${TMP_TAG} not resolvable after mutate"
