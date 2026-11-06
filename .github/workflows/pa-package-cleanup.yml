@@ -1,0 +1,269 @@
+name: PA package cleanup (remove stale latest)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: pa-package-cleanup
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+  PKG: openmes-pa
+  TMP_TAG: cleanup-latest-tmp
+  ROLLBACK_DIGEST: sha256:387c3b0a9a17ddb028aa2f5b775f28ec5d7eed0e1bd0bab4ca0a86a184e3ebd8
+  PROD_DIGEST: sha256:997dddf7b95c51faa55f893d67ca8fc19d92d42403a1b4ed98fcc91f7b8c9573
+
+jobs:
+  cleanup-latest-tag:
+    name: Remove stale latest tag only
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install crane (pinned, checksum verified)
+        run: |
+          set -euo pipefail
+          V=v0.22.1
+          BASE="https://github.com/google/go-containerregistry/releases/download/${V}"
+          mkdir -p "${RUNNER_TEMP}/crane"
+          cd "${RUNNER_TEMP}/crane"
+          curl -fsSLO "${BASE}/go-containerregistry_Linux_x86_64.tar.gz"
+          curl -fsSLO "${BASE}/checksums.txt"
+          grep 'go-containerregistry_Linux_x86_64.tar.gz$' checksums.txt | sha256sum -c -
+          tar -xzf go-containerregistry_Linux_x86_64.tar.gz crane
+          echo "${PWD}" >> "${GITHUB_PATH}"
+          ./crane version
+
+      - name: Guard, retag latest to temp version, delete only that version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          IMAGE="${REGISTRY}/${OWNER}/${PKG}"
+          PROTECTED_TAGS=(
+            "pa-r23-20261105"
+            "sha-23af1ac"
+            "pa-0.28.0-20261105"
+            "sha-8e175db"
+          )
+
+          fail() { echo "::error::GUARD FAILURE: $*" >&2; exit 1; }
+          log() { echo "==> $*"; }
+
+          digest_of() {
+            crane digest "${IMAGE}:$1" 2>/dev/null || true
+          }
+
+          assert_tag() {
+            local tag="$1" want="$2" got
+            got="$(digest_of "${tag}")"
+            [[ "${got}" == "${want}" ]] || fail "tag ${tag} -> ${got:-MISSING}, expected ${want}"
+            echo "  ${tag} -> ${got}"
+          }
+
+          anon_token() {
+            curl -fsSL "https://ghcr.io/token?scope=repository:${OWNER}/${PKG}:pull&service=ghcr.io" \
+              | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])'
+          }
+
+          anon_digest() {
+            local tag="$1" tok
+            tok="$(anon_token)" || return 1
+            curl -fsSI -H "Authorization: Bearer ${tok}" \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+              "https://ghcr.io/v2/${OWNER}/${PKG}/manifests/${tag}" \
+              | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest"{print $2}'
+          }
+
+          list_versions() {
+            gh api --paginate "/users/${OWNER}/packages/container/${PKG}/versions?per_page=100" \
+              --jq '.[] | [(.id|tostring), .name, ((.metadata.container.tags // []) | join(","))] | @tsv'
+          }
+
+          log "Tags before:"
+          crane ls "${IMAGE}" | sort
+
+          log "Guard: protected rollback tags must point to the expected digests"
+          assert_tag "pa-r23-20261105" "${ROLLBACK_DIGEST}"
+          assert_tag "sha-23af1ac" "${ROLLBACK_DIGEST}"
+          assert_tag "pa-0.28.0-20261105" "${PROD_DIGEST}"
+          assert_tag "sha-8e175db" "${PROD_DIGEST}"
+
+          log "Guard: latest must currently point to the rollback digest (or be absent)"
+          latest_digest="$(digest_of latest)"
+          tmp_digest="$(digest_of "${TMP_TAG}")"
+          log "latest=${latest_digest:-ABSENT} ${TMP_TAG}=${tmp_digest:-ABSENT}"
+
+          if [[ -n "${latest_digest}" && "${latest_digest}" != "${ROLLBACK_DIGEST}" && "${latest_digest}" != "${tmp_digest}" ]]; then
+            fail "latest points to unexpected digest ${latest_digest}"
+          fi
+
+          if [[ -n "${tmp_digest}" && ( "${tmp_digest}" == "${ROLLBACK_DIGEST}" || "${tmp_digest}" == "${PROD_DIGEST}" ) ]]; then
+            fail "${TMP_TAG} points to a protected digest ${tmp_digest}"
+          fi
+
+          log "Preflight: list package versions (read:packages must be granted to GITHUB_TOKEN)"
+          if ! list_versions > /dev/null; then
+            fail "cannot list package versions; GITHUB_TOKEN lacks read:packages. STOP (no changes made)"
+          fi
+
+          log "Preflight: verify DELETE permission with a no-op on a nonexistent version id"
+          probe_status="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/user/packages/container/${PKG}/versions/999999999999")"
+          case "${probe_status}" in
+            404) echo "  delete endpoint authorized (404 for nonexistent id)" ;;
+            401|403) fail "DELETE endpoint denied (HTTP ${probe_status}); GITHUB_TOKEN lacks package admin/write. STOP (no changes made)" ;;
+            *) fail "unexpected DELETE preflight status ${probe_status}; STOP (no changes made)" ;;
+          esac
+
+          if [[ -z "${latest_digest}" && -z "${tmp_digest}" ]]; then
+            log "latest is already absent and no temp tag exists; nothing to delete"
+          else
+            if [[ -z "${tmp_digest}" ]]; then
+              log "Creating temp version via crane mutate (new digest, tag ${TMP_TAG})"
+              stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+              crane mutate --platform=linux/amd64 \
+                --annotation "org.opencontainers.image.cleanup.reason=remove-stale-latest" \
+                --annotation "org.opencontainers.image.cleanup.timestamp=${stamp}" \
+                -t "${IMAGE}:${TMP_TAG}" "${IMAGE}@${ROLLBACK_DIGEST}" \
+                || fail "crane mutate failed"
+              tmp_digest="$(digest_of "${TMP_TAG}")"
+              [[ -n "${tmp_digest}" ]] || fail "temp tag ${TMP_TAG} not resolvable after mutate"
+              if [[ "${tmp_digest}" == "${ROLLBACK_DIGEST}" || "${tmp_digest}" == "${PROD_DIGEST}" ]]; then
+                fail "mutate produced protected digest ${tmp_digest}; refusing to continue"
+              fi
+              log "Temp digest: ${tmp_digest}"
+            fi
+
+            if [[ "${latest_digest}" != "${tmp_digest}" ]]; then
+              log "Moving latest from ${latest_digest:-ABSENT} to temp digest ${tmp_digest}"
+              crane tag "${IMAGE}@${tmp_digest}" latest || fail "crane tag latest failed"
+            else
+              log "latest already points to temp digest; resuming"
+            fi
+
+            log "Guard: verify latest -> temp and protected tags unchanged"
+            moved=""
+            for _ in $(seq 1 12); do
+              moved="$(digest_of latest)"
+              [[ "${moved}" == "${tmp_digest}" ]] && break
+              sleep 5
+            done
+            [[ "${moved}" == "${tmp_digest}" ]] || fail "latest -> ${moved:-MISSING}, expected temp ${tmp_digest}"
+            echo "  latest -> ${moved}"
+            assert_tag "pa-r23-20261105" "${ROLLBACK_DIGEST}"
+            assert_tag "sha-23af1ac" "${ROLLBACK_DIGEST}"
+            assert_tag "pa-0.28.0-20261105" "${PROD_DIGEST}"
+            assert_tag "sha-8e175db" "${PROD_DIGEST}"
+
+            log "Locating the temporary package version (tags: ${TMP_TAG},latest)"
+            target_id=""
+            for _ in $(seq 1 12); do
+              versions="$(list_versions)" || fail "cannot list package versions; GITHUB_TOKEN lacks read:packages. STOP (no version deleted)"
+              target_id=""
+              while IFS=$'\t' read -r id name tags; do
+                [[ -z "${id:-}" ]] && continue
+                has_tmp=0
+                has_latest=0
+                IFS=',' read -r -a tag_arr <<< "${tags}"
+                for tag in "${tag_arr[@]}"; do
+                  [[ "${tag}" == "${TMP_TAG}" ]] && has_tmp=1
+                  [[ "${tag}" == "latest" ]] && has_latest=1
+                  for protected in "${PROTECTED_TAGS[@]}"; do
+                    [[ "${tag}" == "${protected}" ]] && fail "version ${id} carries protected tag ${protected}; refusing to delete"
+                  done
+                done
+                if (( has_tmp == 1 && has_latest == 1 )); then
+                  [[ "${name}" == "${tmp_digest}" ]] || fail "candidate version ${id} digest ${name} != temp ${tmp_digest}"
+                  [[ -n "${target_id}" && "${target_id}" != "${id}" ]] && fail "multiple candidate versions: ${target_id}, ${id}"
+                  target_id="${id}"
+                fi
+              done <<< "${versions}"
+              [[ -n "${target_id}" ]] && break
+              sleep 5
+            done
+            [[ -n "${target_id}" ]] || fail "temporary version with tags ${TMP_TAG},latest not found; nothing deleted"
+
+            log "Deleting package version id=${target_id} (tags: ${TMP_TAG},latest; digest ${tmp_digest})"
+            if ! gh api -X DELETE "/user/packages/container/${PKG}/versions/${target_id}"; then
+              fail "DELETE /user/packages/.../versions/${target_id} denied. GITHUB_TOKEN lacks package admin/write. STOP (no PAT fallback)"
+            fi
+            echo "Deleted version id=${target_id}"
+
+            log "Waiting until latest and ${TMP_TAG} disappear from the registry"
+            for _ in $(seq 1 12); do
+              now_tags="$(crane ls "${IMAGE}" | sort)"
+              if ! grep -qx "latest" <<< "${now_tags}" && ! grep -qx "${TMP_TAG}" <<< "${now_tags}"; then
+                break
+              fi
+              sleep 5
+            done
+          fi
+
+          log "Final guard: authenticated tag set and digests"
+          final_tags="$(crane ls "${IMAGE}" | sort)"
+          echo "${final_tags}"
+          expected_tags="$(printf '%s\n' "${PROTECTED_TAGS[@]}" | sort)"
+          [[ "${final_tags}" == "${expected_tags}" ]] || fail "final tag set mismatch: expected only the 4 protected tags"
+          if crane digest "${IMAGE}:latest" > /dev/null 2>&1; then
+            fail "latest still resolves after cleanup"
+          fi
+          assert_tag "pa-r23-20261105" "${ROLLBACK_DIGEST}"
+          assert_tag "sha-23af1ac" "${ROLLBACK_DIGEST}"
+          assert_tag "pa-0.28.0-20261105" "${PROD_DIGEST}"
+          assert_tag "sha-8e175db" "${PROD_DIGEST}"
+
+          log "Final guard: anonymous registry access"
+          anon_latest="$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $(anon_token)" \
+            -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+            "https://ghcr.io/v2/${OWNER}/${PKG}/manifests/latest")"
+          [[ "${anon_latest}" == "404" ]] || fail "anonymous latest returned HTTP ${anon_latest}, expected 404"
+          for pair in \
+            "pa-r23-20261105:${ROLLBACK_DIGEST}" \
+            "sha-23af1ac:${ROLLBACK_DIGEST}" \
+            "pa-0.28.0-20261105:${PROD_DIGEST}" \
+            "sha-8e175db:${PROD_DIGEST}"; do
+            tag="${pair%%:*}"
+            want="${pair##*:}"
+            got="$(anon_digest "${tag}")" || fail "anonymous manifest request failed for ${tag}"
+            [[ "${got}" == "${want}" ]] || fail "anonymous ${tag} -> ${got:-MISSING}, expected ${want}"
+            echo "  anonymous ${tag} -> ${got}"
+          done
+
+          log "Final guard: anonymous docker pull by tag and digest"
+          docker logout "${REGISTRY}" > /dev/null 2>&1 || true
+          docker pull "${IMAGE}:pa-r23-20261105"
+          docker pull "${IMAGE}@${ROLLBACK_DIGEST}"
+          docker pull "${IMAGE}:pa-0.28.0-20261105"
+          docker pull "${IMAGE}@${PROD_DIGEST}"
+
+          log "Cleanup complete: only the 4 protected tags remain; latest is gone"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### PA package cleanup"
+            echo ""
+            echo "- Protected rollback digest: \`${ROLLBACK_DIGEST}\` (pa-r23-20261105, sha-23af1ac)"
+            echo "- Protected production digest: \`${PROD_DIGEST}\` (pa-0.28.0-20261105, sha-8e175db)"
+            echo "- Removed tag: \`latest\` only (via temporary version \`${TMP_TAG}\`)"
+            echo "- Result: ${{ job.status }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
