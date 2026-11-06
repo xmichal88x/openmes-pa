@@ -60,7 +60,9 @@ services:
       APP_KEY: ${APP_KEY}
       APP_URL: ${APP_URL:-http://localhost}
       # AGPL §13 corresponding source, rendered by the UI (components/SourceLink).
-      APP_SOURCE_URL: ${APP_SOURCE_URL:-https://github.com/xmichal88x/openmes-pa/tree/pa/0.28}
+      # Set by scripts/deploy-openmes.sh from the image revision label; an explicit
+      # value here is preserved as an override. Empty means "use the app default".
+      APP_SOURCE_URL: ${APP_SOURCE_URL:-}
       # Sanctum SPA stateful hosts. Empty by default (production derives them
       # from APP_URL). Set this when serving on a host:port the app URL doesn't
       # cover — e.g. localhost:8084 or a LAN IP — or the live-sync /api
@@ -134,6 +136,8 @@ services:
       # Without this passthrough a Docker install is stuck on UTC.
       APP_TIMEZONE: ${APP_TIMEZONE:-UTC}
       APP_KEY: ${APP_KEY}
+      # AGPL §13 source URL; deploy-openmes.sh pins it to the image revision.
+      APP_SOURCE_URL: ${APP_SOURCE_URL:-}
       DB_CONNECTION: pgsql
       DB_HOST: postgres
       DB_PORT: 5432
@@ -181,6 +185,8 @@ services:
       # Without this passthrough a Docker install is stuck on UTC.
       APP_TIMEZONE: ${APP_TIMEZONE:-UTC}
       APP_KEY: ${APP_KEY}
+      # AGPL §13 source URL; deploy-openmes.sh pins it to the image revision.
+      APP_SOURCE_URL: ${APP_SOURCE_URL:-}
       DB_CONNECTION: pgsql
       DB_HOST: postgres
       DB_PORT: 5432
@@ -232,6 +238,8 @@ services:
       # Without this passthrough a Docker install is stuck on UTC.
       APP_TIMEZONE: ${APP_TIMEZONE:-UTC}
       APP_KEY: ${APP_KEY}
+      # AGPL §13 source URL; deploy-openmes.sh pins it to the image revision.
+      APP_SOURCE_URL: ${APP_SOURCE_URL:-}
       DB_CONNECTION: pgsql
       DB_HOST: postgres
       DB_PORT: 5432
@@ -308,6 +316,8 @@ services:
       # Without this passthrough a Docker install is stuck on UTC.
       APP_TIMEZONE: ${APP_TIMEZONE:-UTC}
       APP_KEY: ${APP_KEY}
+      # AGPL §13 source URL; deploy-openmes.sh pins it to the image revision.
+      APP_SOURCE_URL: ${APP_SOURCE_URL:-}
       QUEUE_CONNECTION: ${QUEUE_CONNECTION:-database}
       DB_CONNECTION: pgsql
       DB_HOST: postgres

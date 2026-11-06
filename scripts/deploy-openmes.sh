@@ -40,6 +40,12 @@
 #   OPENMES_ENABLE_QUEUE=0|1                         (default: 0)
 #   OPENMES_ENABLE_MQTT=0|1                          (default: 0)
 #   OPENMES_ENABLE_MODBUS=0|1                        (default: 0)
+#   APP_SOURCE_URL=...                               (default: image revision label)
+#
+# AGPL §13 provenance: after the image is available locally the script reads
+# org.opencontainers.image.revision and exports APP_SOURCE_URL to
+# https://github.com/xmichal88x/openmes-pa/tree/<revision>. A missing/empty
+# label aborts the deploy. An explicitly provided APP_SOURCE_URL is kept.
 
 set -Eeuo pipefail
 
@@ -62,6 +68,7 @@ usage() {
         '  OPENMES_ENABLE_QUEUE  0|1 (default: 0, or keep an existing container)' \
         '  OPENMES_ENABLE_MQTT   0|1 (default: 0, or keep an existing container)' \
         '  OPENMES_ENABLE_MODBUS 0|1 (default: 0, opt-in only)' \
+        '  APP_SOURCE_URL        AGPL source link (default: image revision label)' \
         '' \
         'Always deployed: backend reverb. See the header for details.'
 }
@@ -267,7 +274,17 @@ else
     log "OPENMES_PULL_POLICY=never; using the local image"
 fi
 
-# 4. Backend first. It runs config:cache against the shared bootstrap cache
+# 4. AGPL §13 provenance. The source link shown in the UI must point at the
+#    exact commit that produced this image, never a mutable branch. A missing
+#    revision label aborts the deploy (fail closed: no provenance, no deploy).
+REV="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$OPENMES_IMAGE" 2>/dev/null || true)"
+if [[ -z "$REV" || "$REV" == "<no value>" ]]; then
+    die "image $OPENMES_IMAGE has no org.opencontainers.image.revision label — refusing deploy without provenance"
+fi
+export APP_SOURCE_URL="${APP_SOURCE_URL:-https://github.com/xmichal88x/openmes-pa/tree/$REV}"
+log "AGPL source URL: $APP_SOURCE_URL"
+
+# 5. Backend first. It runs config:cache against the shared bootstrap cache
 #    volume; starting sidecars in parallel with it caused a one-off restart.
 log "starting backend"
 UP_DONE=1
@@ -277,7 +294,7 @@ log "waiting for ${HEALTH_URL} (up to $((HEALTH_TRIES * 5))s)"
 wait_for_health || fail_after_up "health check did not return 200: $HEALTH_URL"
 log "backend is healthy"
 
-# 5. Then the sidecars. Only selected services are named explicitly, so a
+# 6. Then the sidecars. Only selected services are named explicitly, so a
 #    sidecar that is not wanted is never started by accident.
 if [[ "${#REST_SERVICES[@]}" -gt 0 ]]; then
     log "starting sidecars: ${REST_SERVICES[*]}"
@@ -285,7 +302,7 @@ if [[ "${#REST_SERVICES[@]}" -gt 0 ]]; then
         || fail_after_up "docker compose up sidecars failed"
 fi
 
-# 6. Every selected container must run the same image ID, and that ID must be
+# 7. Every selected container must run the same image ID, and that ID must be
 #    the pinned one — a silent rebuild/stale tag fails the deploy.
 log "verifying container image IDs"
 IMAGE_IDS=()
@@ -304,7 +321,7 @@ PINNED_ID="$(docker image inspect -f '{{.Id}}' "$OPENMES_IMAGE")"
 [[ "$RUNNING_ID" == "$PINNED_ID" ]] \
     || fail_after_up "containers run $RUNNING_ID but pinned image is $PINNED_ID"
 
-# 7. Report. RepoDigests is empty for a purely local image, hence the fallback.
+# 8. Report. RepoDigests is empty for a purely local image, hence the fallback.
 log "OK — deploy complete"
 printf 'image:    %s\n' "$OPENMES_IMAGE"
 printf 'image ID: %s\n' "$RUNNING_ID"
