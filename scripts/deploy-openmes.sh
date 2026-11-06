@@ -157,8 +157,14 @@ if [[ "$ENABLE_MODBUS" == "1" ]]; then
     SERVICES+=(modbus-poller)
 fi
 REST_SERVICES=()
-if [[ "${#SERVICES[@]}" -gt 2 ]]; then
-    REST_SERVICES=("${SERVICES[@]:2}")
+if [[ "${#SERVICES[@]}" -gt 1 ]]; then
+    REST_SERVICES=("${SERVICES[@]:1}")
+fi
+
+if [[ "${OPENMES_PRINT_PLAN:-0}" == "1" ]]; then
+    printf 'SERVICES=%s\n' "${SERVICES[*]}"
+    printf 'REST_SERVICES=%s\n' "${REST_SERVICES[*]}"
+    exit 0
 fi
 
 log "compose directory: $REPO_ROOT"

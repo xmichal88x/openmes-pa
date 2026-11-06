@@ -34,6 +34,13 @@ jobs:
           test -d backend/modules/PipelineDashboard
           test -d backend/modules/PlPackagingExtras
 
+      - name: Deploy script plan gate
+        run: |
+          OPENMES_IMAGE="ghcr.io/xmichal88x/openmes-pa@sha256:$(printf '0%.0s' {1..64})" \
+          OPENMES_PRINT_PLAN=1 scripts/deploy-openmes.sh > /tmp/deploy-plan
+          grep -q '^SERVICES=backend reverb' /tmp/deploy-plan
+          grep -q '^REST_SERVICES=.*reverb' /tmp/deploy-plan
+
       - name: Setup PHP
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
