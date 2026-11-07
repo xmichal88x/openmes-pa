@@ -7330,5 +7330,15 @@
     "QA profile is corrupt - call a supervisor.": "QA profile is corrupt - call a supervisor.",
     "QA required before packing.": "QA required before packing.",
     "QA failed - choose rework or re-cut.": "QA failed - choose rework or re-cut.",
-    "QA failed - unit is now :status.": "QA failed - unit is now :status."
+    "QA failed - unit is now :status.": "QA failed - unit is now :status.",
+    "Process serial": "Process serial",
+    "Blocked units awaiting a decision.": "Blocked units awaiting a decision.",
+    "Scan serial number or process serial": "Scan serial number or process serial",
+    "No blocked unit matches :code.": "No blocked unit matches :code.",
+    "Could not save the rework decision.": "Could not save the rework decision.",
+    "Pass rework": "Pass rework",
+    "Fail rework": "Fail rework",
+    "Rework passed": "Passed",
+    "Rework failed": "Failed",
+    "No blocked units.": "No blocked units."
 }

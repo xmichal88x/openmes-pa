@@ -345,6 +345,7 @@ Route::middleware('auth')->group(function () {
         Route::post('/unit-labels/subassembly', [UnitLabelStationController::class, 'subassembly'])->name('unit-labels.subassembly');
         Route::post('/unit-labels/{serialUnit}/block', [UnitLabelStationController::class, 'block'])->name('unit-labels.block');
         Route::post('/unit-labels/{serialUnit}/unblock', [UnitLabelStationController::class, 'unblock'])->name('unit-labels.unblock');
+        Route::get('/rework', [\App\Http\Controllers\Web\Operator\ReworkController::class, 'index'])->name('rework.index')->middleware('role:Supervisor|Admin');
         Route::get('/workstation/check', [OperatorWorkstationController::class, 'check'])->name('workstation.check');
         // Manual machine-state set (#87) — operator/supervisor sets a workstation's state.
         Route::post('/workstation/machine-state/{workstation}', [OperatorWorkstationController::class, 'setMachineState'])->name('workstation.machine-state');

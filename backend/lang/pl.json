@@ -7422,5 +7422,15 @@
     "QA profile is corrupt - call a supervisor.": "Profil QA jest uszkodzony — wezwij supervisora.",
     "QA required before packing.": "QA jest wymagane przed zapakowaniem.",
     "QA failed - choose rework or re-cut.": "QA niezaliczone — wybierz poprawę lub re-cut.",
-    "QA failed - unit is now :status.": "QA niezaliczone — sztuka ma teraz status :status."
+    "QA failed - unit is now :status.": "QA niezaliczone — sztuka ma teraz status :status.",
+    "Process serial": "Numer seryjny procesu",
+    "Blocked units awaiting a decision.": "Zablokowane sztuki oczekujące na decyzję.",
+    "Scan serial number or process serial": "Zeskanuj numer seryjny lub numer seryjny procesu",
+    "No blocked unit matches :code.": "Żadna zablokowana sztuka nie pasuje do :code.",
+    "Could not save the rework decision.": "Nie udało się zapisać decyzji o przeróbce.",
+    "Pass rework": "Zalicz przeróbkę",
+    "Fail rework": "Nie zaliczaj przeróbki",
+    "Rework passed": "Zaliczone",
+    "Rework failed": "Niezaliczone",
+    "No blocked units.": "Brak zablokowanych sztuk."
 }
