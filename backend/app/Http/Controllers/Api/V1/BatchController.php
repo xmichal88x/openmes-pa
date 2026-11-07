@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Api\V1\RecutBatchesRequest;
 use App\Http\Requests\Api\V1\ReleaseBatchRequest;
 use App\Models\Batch;
 use App\Models\WorkOrder;
@@ -11,6 +12,7 @@ use App\Services\Material\MaterialAllocationService;
 use App\Services\WorkOrder\WorkOrderService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class BatchController extends Controller
 {
@@ -102,6 +104,66 @@ class BatchController extends Controller
         }
 
         return response()->json($response, 201);
+    }
+
+    /**
+     * Recut a defective batch (RQ-PA-214 / P2-T2).
+     *
+     * This is a low-level capacity operation, not a new work order or job type:
+     * it opens a replacement batch on the same order, outside `planned_qty`,
+     * and reopens a DONE order to IN_PROGRESS. PENDING/IN_PROGRESS keep their
+     * status. Repeating the same `idempotency_key` returns the batch created by
+     * the first call instead of cutting a second one.
+     */
+    public function recut(RecutBatchesRequest $request, WorkOrder $workOrder): JsonResponse
+    {
+        $validated = $request->validated();
+
+        [$batch, $created] = DB::transaction(function () use ($workOrder, $validated) {
+            $workOrder = WorkOrder::whereKey($workOrder->getKey())->lockForUpdate()->firstOrFail();
+
+            $existing = Batch::query()
+                ->where('work_order_id', $workOrder->id)
+                ->where('is_replacement', true)
+                ->where('extra_data->idempotency_key', $validated['idempotency_key'])
+                ->first();
+
+            if ($existing) {
+                return [$existing->load(['steps', 'workstation']), false];
+            }
+
+            if ($workOrder->status === WorkOrder::STATUS_DONE) {
+                $reopened = WorkOrderService::applyTransition($workOrder, 'reopen');
+
+                if (! $reopened['ok']) {
+                    abort(422, $reopened['message']);
+                }
+
+                $workOrder = $workOrder->fresh();
+            }
+
+            // Reuse the normal batch creation path (numbering, status, steps from
+            // the process snapshot) but skip BatchController::store's planned-qty
+            // guard: a replacement lives outside the order's planned quantity.
+            $batch = $this->workOrderService->createBatch($workOrder, (float) $validated['target_qty']);
+
+            // Replacement flags are intentionally not mass-assignable.
+            $batch->forceFill([
+                'is_replacement' => true,
+                'replaces_batch_id' => $validated['replaces_batch_id'] ?? null,
+                'extra_data' => [
+                    'idempotency_key' => $validated['idempotency_key'],
+                    'reason' => $validated['reason'],
+                ],
+            ])->save();
+
+            return [$batch->fresh(['steps', 'workstation']), true];
+        });
+
+        return response()->json([
+            'message' => $created ? 'Replacement batch created successfully' : 'Replacement batch already exists',
+            'data' => $batch,
+        ], $created ? 201 : 200);
     }
 
     /**

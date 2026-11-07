@@ -51,6 +51,9 @@ class Batch extends Model
         'target_qty',
         'produced_qty',
         'status',
+        // Replacement flags (RQ-PA-214) are deliberately NOT fillable: they are
+        // set only by the dedicated replacement path via forceFill, never from a
+        // mass-assigned request payload.
         'started_at',
         'completed_at',
         'expiry_date',
@@ -60,6 +63,8 @@ class Batch extends Model
         'udi_code',
         'scrap_qty',
         'notes',
+        // Generic batch metadata (e.g. the re-cut path's idempotency_key/reason).
+        'extra_data',
     ];
 
     protected function casts(): array
@@ -69,6 +74,8 @@ class Batch extends Model
             'target_qty' => 'decimal:2',
             'produced_qty' => 'decimal:2',
             'scrap_qty' => 'decimal:2',
+            'is_replacement' => 'boolean',
+            'extra_data' => 'array',
             'started_at' => 'datetime',
             'completed_at' => 'datetime',
             'released_at' => 'datetime',
@@ -82,6 +89,23 @@ class Batch extends Model
     public function workOrder(): BelongsTo
     {
         return $this->belongsTo(WorkOrder::class);
+    }
+
+    /**
+     * The batch this replacement batch was cut for (RQ-PA-214).
+     */
+    public function replacesBatch(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'replaces_batch_id');
+    }
+
+    /**
+     * Replacement batches cut against this one. Several are allowed — one per
+     * re-cut — which is why `replaces_batch_id` is indexed but not unique.
+     */
+    public function replacements(): HasMany
+    {
+        return $this->hasMany(self::class, 'replaces_batch_id');
     }
 
     /**

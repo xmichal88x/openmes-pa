@@ -683,6 +683,7 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     // Batches (nested under work orders)
     Route::get('/work-orders/{workOrder}/batches', [BatchController::class, 'index']);
     Route::post('/work-orders/{workOrder}/batches', [BatchController::class, 'store']);
+    Route::post('/work-orders/{workOrder}/recut-batches', [BatchController::class, 'recut']);
     Route::get('/batches/{batch}', [BatchController::class, 'show']);
     Route::patch('/batches/{batch}', [BatchController::class, 'update']);
     Route::post('/batches/{batch}/cancel', [BatchController::class, 'cancel']);
