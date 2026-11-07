@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import parseScanPayload, { parseScanPayload as namedParseScanPayload } from './scanPayload';
+import parseScanPayload, { parseScanPayload as namedParseScanPayload, qaItemsFor } from './scanPayload';
 
 describe('parseScanPayload', () => {
     it('returns a plain Code128 payload unchanged', () => {
@@ -38,5 +38,34 @@ describe('parseScanPayload', () => {
 
     it('exports the same function as named and default', () => {
         expect(namedParseScanPayload).toBe(parseScanPayload);
+    });
+});
+
+describe('qaItemsFor', () => {
+    const profile = {
+        checklist_json: [
+            { id: 'dim', label: 'Wymiar', type: 'bool', required: true },
+            { id: 'qty', label: 'Ilość', type: 'number', required: true },
+            { id: 'note', label: 'Notatka', type: 'text', required: true },
+            { id: 'extra', label: 'Dodatkowe', type: 'bool', required: false },
+        ],
+    };
+
+    it('sends missing required bools as false', () => {
+        expect(qaItemsFor(profile, {})).toContainEqual({ id: 'dim', value: false });
+    });
+
+    it('keeps a provided true bool', () => {
+        expect(qaItemsFor(profile, { dim: true })).toContainEqual({ id: 'dim', value: true });
+    });
+
+    it('omits optional items without a value', () => {
+        expect(qaItemsFor(profile, {}).some((item) => item.id === 'extra')).toBe(false);
+    });
+
+    it('sends missing required number and text items as an empty string', () => {
+        const items = qaItemsFor(profile, {});
+        expect(items).toContainEqual({ id: 'qty', value: '' });
+        expect(items).toContainEqual({ id: 'note', value: '' });
     });
 });

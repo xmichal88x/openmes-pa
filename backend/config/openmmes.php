@@ -25,6 +25,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | QA Enforcement
+    |--------------------------------------------------------------------------
+    |
+    | When enabled, a packing scan of a product type with a required QA
+    | profile is blocked until the checklist passes. When disabled, the QA
+    | gate only reports its shadow verdict and packing proceeds unchanged.
+    |
+    */
+    'qa_enforcement' => env('QA_ENFORCEMENT', false),
+
+    /*
+    |--------------------------------------------------------------------------
     | Default Token TTL
     |--------------------------------------------------------------------------
     |

@@ -904,6 +904,9 @@ Route::middleware('auth')->group(function () {
         Route::post('quality-control-triggers/{qualityControlTrigger}/toggle-active', [\App\Http\Controllers\Web\Admin\QualityControlTriggerController::class, 'toggleActive'])->name('quality-control-triggers.toggle-active');
         Route::resource('quality-control-triggers', \App\Http\Controllers\Web\Admin\QualityControlTriggerController::class)->except(['show']);
 
+        // QA checklist profiles — one per MES product type.
+        Route::get('/qa-profiles', [\App\Http\Controllers\Web\Admin\QaProfileController::class, 'index'])->name('qa-profiles.index');
+
         // ── Warehousing (#212) ────────────────────────────────────────────────
         // Warehouses, per-warehouse balances and the stock documents production
         // generates (material releases, product receipts). Gated by the

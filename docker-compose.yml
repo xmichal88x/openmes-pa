@@ -45,6 +45,7 @@ services:
     environment:
       APP_NAME: ${APP_NAME:-OpenMES}
       APP_ENV: ${APP_ENV:-production}
+      QA_ENFORCEMENT: ${QA_ENFORCEMENT:-0}
       # Plant timezone: every rendered timestamp, report boundary and scheduled job
       # uses it (config/app.php → app.timezone, and the `timezone` Inertia prop).
       # Without this passthrough a Docker install is stuck on UTC.

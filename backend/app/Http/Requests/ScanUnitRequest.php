@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use App\Support\UnitSerialisation;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 /** A process serial scanned at packing, normalised the same way it was stored. */
 class ScanUnitRequest extends FormRequest
@@ -30,6 +31,13 @@ class ScanUnitRequest extends FormRequest
             'auto_carton' => ['nullable', 'boolean'],
             // The unit's weight off the scale, when the packing step checks it.
             'weight_g' => ['nullable', 'numeric', 'min:0', 'max:1000000'],
+            // QA checklist values returned by the station after a needs_qa answer.
+            'qa' => ['nullable', 'array'],
+            'qa.items' => ['nullable', 'array'],
+            'qa.items.*.id' => ['required_with:qa.items', 'string', 'max:100'],
+            'qa.items.*.value' => ['present'],
+            'qa.decision' => ['nullable', Rule::in(['rework', 'recut', 'scrap'])],
+            'qa.note' => ['nullable', 'string', 'max:500'],
         ];
     }
 }

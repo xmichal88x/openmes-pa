@@ -23,6 +23,7 @@ use App\Services\Packaging\PackagingScanService;
 use App\Services\Packaging\UnitPackingService;
 use App\Services\Production\OperatorWorkstationSelection;
 use App\Services\Production\PalletBackflushService;
+use App\Services\Quality\QualityGateService;
 use App\Services\Traceability\BindingException;
 use App\Support\ShiftWindow;
 use Carbon\Carbon;
@@ -228,7 +229,7 @@ class PackagingController extends Controller
      * process serial label and gets the unit's serial number back with
      * ready-to-print label URLs.
      */
-    public function scanUnit(ScanUnitRequest $request, UnitPackingService $packing)
+    public function scanUnit(ScanUnitRequest $request, UnitPackingService $packing, QualityGateService $qualityGate)
     {
         // The label carries the process serial, the unit serial, or both - a unit
         // with no process serial (the product has no PSN sequence) is packed by
@@ -291,6 +292,71 @@ class PackagingController extends Controller
             $measured = ['weight_g' => $weight];
         }
 
+        // QA pre-scan gate: checked after the scale, before anything irreversible
+        // (opening a carton, packUnit). A rescan of an already packed unit skips
+        // the gate - the unit is not going in a second time.
+        $alreadyPacked = $unit->packed_at !== null;
+        $qa = null;
+        if (! $alreadyPacked) {
+            $unit->loadMissing('workOrder.productType');
+            $qa = $qualityGate->evaluate($unit, $request->validated('qa'));
+            $qaProfile = $qa['profile'] ?? null;
+            $qaProfilePayload = $qaProfile ? [
+                'id' => $qaProfile->id,
+                'product_type_code' => $qaProfile->product_type_code,
+                'version' => $qaProfile->version,
+                'checklist_json' => $qaProfile->checklist_json,
+            ] : null;
+
+            if ($qa['status'] === 'corrupt') {
+                return response()->json([
+                    'message' => __('QA profile is corrupt - call a supervisor.'),
+                    'qa_corrupt' => true,
+                ], 422);
+            }
+
+            if ($qa['status'] === 'needs_qa') {
+                return response()->json([
+                    'message' => __('QA required before packing.'),
+                    'needs_qa' => true,
+                    'qa_profile' => $qaProfilePayload,
+                    'qa_errors' => $qa['errors'] ?? [],
+                ], 422);
+            }
+
+            if ($qa['status'] === 'failed') {
+                $decision = data_get($request->validated(), 'qa.decision');
+
+                if (! $decision) {
+                    return response()->json([
+                        'message' => __('QA failed - choose rework or re-cut.'),
+                        'quality_failed' => true,
+                        'requires_decision' => true,
+                        'qa_errors' => $qa['errors'] ?? [],
+                        'qa_profile' => $qaProfilePayload,
+                    ], 422);
+                }
+
+                $failure = $qualityGate->applyFailure(
+                    $unit,
+                    $request->user(),
+                    $decision,
+                    $packingStep,
+                    $qa['errors'] ?? [],
+                    self::benchId($request),
+                );
+
+                return response()->json([
+                    'message' => __('QA failed - unit is now :status.', ['status' => $failure['status']]),
+                    'quality_failed' => true,
+                    'decision' => $decision,
+                    'unit_status' => $failure['status'],
+                    'qa_errors' => $qa['errors'] ?? [],
+                    'qa_profile' => $qaProfilePayload,
+                ], 422);
+            }
+        }
+
         $carton = $request->validated('carton_id') ? UnitCarton::find($request->validated('carton_id')) : null;
         $pallet = $request->validated('pallet_id') ? Pallet::find($request->validated('pallet_id')) : null;
         $auto = $request->boolean('auto_carton');
@@ -314,8 +380,9 @@ class PackagingController extends Controller
         }
         // Whether to print the unit's label here: by default every scan prints
         // one (a box label read off the unit's serial). A packing step can turn
-        // that off, and then only a unit that has no label yet gets one.
-        $labelNeeded = ($config['unit_label'] ?? true) !== false || empty($unit->extra_data['label_applied_at']);
+        // that off, and the step's setting wins - no unit label is offered then,
+        // whether or not the unit was already labelled upstream.
+        $labelNeeded = ($config['unit_label'] ?? true) !== false;
 
         // The service refuses a unit the line has taken off (scrapped, blocked
         // after tests, already shipped) - that is how a bad unit leaves.
@@ -325,7 +392,12 @@ class PackagingController extends Controller
         // The box opened for this scan and the packing stand or fall together: a
         // refused unit leaves no empty carton behind on the bench.
         try {
-            [$unit, $carton] = DB::transaction(function () use ($request, $packing, $unit, $carton, $pallet, $auto, $alreadyPlaced, $config, $capacity, $measured) {
+            [$unit, $carton] = DB::transaction(function () use ($request, $packing, $qualityGate, $qa, $packingStep, $unit, $carton, $pallet, $auto, $alreadyPlaced, $config, $capacity, $measured) {
+                // A passing QA check and the pack commit together: the pass is not
+                // left behind if the carton refuses the unit.
+                if ($qa && $qa['status'] === 'passed') {
+                    $qualityGate->recordPass($unit, $request->user(), $packingStep, $qa['profile'], $qa['items'] ?? [], self::benchId($request));
+                }
                 // The bench had no box open (or only one for another order): when the
                 // order packs into cartons, the scan takes the operator's open carton of
                 // this order again, else opens one, so nobody has to remember "New

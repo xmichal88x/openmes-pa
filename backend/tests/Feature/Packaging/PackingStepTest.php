@@ -252,7 +252,7 @@ class PackingStepTest extends TestCase
         $this->actingAs($this->operator)->postJson(route('packaging.scan-unit'), ['psn' => "P-{$wo->id}-3", 'auto_carton' => true])
             ->assertOk()->assertJsonPath('label_needed', true);
 
-        // A step set not to print one leaves a labelled unit alone and still labels an unlabelled one.
+        // A step set not to print one wins: no unit label is offered, labelled upstream or not.
         $quiet = $this->packableOrder(['unit' => 'carton', 'carton_capacity' => 5, 'unit_label' => false]);
         $this->assertFalse(TemplateStep::normalisePackingConfig(['unit_label' => false])['unit_label']);
         $this->assertArrayNotHasKey('unit_label', TemplateStep::normalisePackingConfig(['unit_label' => null]));
@@ -260,7 +260,7 @@ class PackingStepTest extends TestCase
         $this->actingAs($this->operator)->postJson(route('packaging.scan-unit'), ['psn' => "P-{$quiet->id}-1", 'auto_carton' => true])
             ->assertOk()->assertJsonPath('label_needed', false);
         $this->actingAs($this->operator)->postJson(route('packaging.scan-unit'), ['psn' => "P-{$quiet->id}-2", 'auto_carton' => true])
-            ->assertOk()->assertJsonPath('label_needed', true);
+            ->assertOk()->assertJsonPath('label_needed', false);
 
         // An explicit destination (no flag) opens nothing.
         $this->actingAs($this->operator)->postJson(route('packaging.scan-unit'), ['psn' => "P-{$wo->id}-4"])

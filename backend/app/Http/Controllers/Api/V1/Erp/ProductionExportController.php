@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api\V1\Erp;
 use App\Http\Controllers\Api\V1\Erp\Concerns\BuildsCursorMeta;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\Erp\ProductionExportRequest;
+use App\Models\BatchStep;
+use App\Models\TemplateStep;
 use App\Models\WorkOrder;
 use Illuminate\Http\JsonResponse;
 
@@ -22,7 +24,12 @@ class ProductionExportController extends Controller
     public function completions(ProductionExportRequest $request): JsonResponse
     {
         $query = WorkOrder::query()
-            ->with(['line:id,code,name', 'productType:id,code,name'])
+            ->with([
+                'line:id,code,name',
+                'productType:id,code,name',
+                'batches:id,work_order_id,batch_number',
+                'batches.steps' => fn ($q) => $q->where('kind', TemplateStep::KIND_PACKING),
+            ])
             ->orderBy('id');
 
         // Incremental sync: everything changed at/after the ERP's last poll.
@@ -60,17 +67,44 @@ class ProductionExportController extends Controller
      */
     public function show(int $workOrder): JsonResponse
     {
-        $order = WorkOrder::with(['line:id,code,name', 'productType:id,code,name'])
-            ->findOrFail($workOrder);
+        $order = WorkOrder::with([
+            'line:id,code,name',
+            'productType:id,code,name',
+            'batches:id,work_order_id,batch_number',
+            'batches.steps' => fn ($q) => $q->where('kind', TemplateStep::KIND_PACKING),
+        ])->findOrFail($workOrder);
 
         return response()->json(['data' => $this->present($order)]);
     }
 
     private function present(WorkOrder $wo): array
     {
+        $wo->loadMissing(['batches.steps' => fn ($q) => $q->where('kind', TemplateStep::KIND_PACKING)]);
+
+        $packingSteps = $wo->batches
+            ->flatMap(fn ($batch) => $batch->steps)
+            ->filter(fn (BatchStep $step) => $step->kind === TemplateStep::KIND_PACKING)
+            ->values();
+
+        $sortedPackingSteps = $packingSteps
+            ->sortBy([['step_number', 'asc'], ['id', 'asc']])
+            ->values();
+
+        $openPackingSteps = $sortedPackingSteps
+            ->reject(fn (BatchStep $step) => in_array($step->status, [BatchStep::STATUS_DONE, BatchStep::STATUS_SKIPPED], true));
+
+        $packingStepId = ($openPackingSteps->first() ?? $sortedPackingSteps->last())?->id;
+
+        $packingCompletedAt = $packingSteps->isNotEmpty() && $openPackingSteps->isEmpty()
+            ? $packingSteps->max('completed_at')
+            : null;
+
+        $wcOrderNumber = $wo->extra_data['wc_order_number'] ?? null;
+
         return [
             'order_no' => $wo->order_no,
             'customer_order_no' => $wo->customer_order_no,
+            'wc_order_number' => $wcOrderNumber !== null ? (string) $wcOrderNumber : null,
             'status' => $wo->status,
             'planned_qty' => (float) $wo->planned_qty,
             'produced_qty' => (float) $wo->produced_qty,
@@ -78,6 +112,10 @@ class ProductionExportController extends Controller
             'counting_source' => $wo->counting_source,
             'line_code' => $wo->line?->code,
             'product_type_code' => $wo->productType?->code,
+            'has_packing_step' => $packingSteps->isNotEmpty(),
+            'packing_step_id' => $packingStepId,
+            'packing_completed_at' => $packingCompletedAt?->toIso8601String(),
+            'packing_steps_open' => $openPackingSteps->count(),
             'completed_at' => $wo->completed_at?->toIso8601String(),
             'updated_at' => $wo->updated_at?->toIso8601String(),
         ];

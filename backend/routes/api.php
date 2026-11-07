@@ -44,6 +44,7 @@ use App\Http\Controllers\Api\V1\PalletController;
 use App\Http\Controllers\Api\V1\ProcessConfirmationController;
 use App\Http\Controllers\Api\V1\ProcessTemplateController;
 use App\Http\Controllers\Api\V1\ProductTypeController;
+use App\Http\Controllers\Api\V1\QaProfileController;
 use App\Http\Controllers\Api\V1\QualityCheckController;
 use App\Http\Controllers\Api\V1\QualityControlTaskController;
 use App\Http\Controllers\Api\V1\QualityControlTriggerController;
@@ -396,6 +397,12 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         Route::patch('/quality-control-triggers/{qualityControlTrigger}', [QualityControlTriggerController::class, 'update']);
         Route::post('/quality-control-triggers/{qualityControlTrigger}/toggle-active', [QualityControlTriggerController::class, 'toggleActive']);
         Route::delete('/quality-control-triggers/{qualityControlTrigger}', [QualityControlTriggerController::class, 'destroy']);
+
+        Route::get('/qa-profiles', [QaProfileController::class, 'index']);
+        Route::post('/qa-profiles', [QaProfileController::class, 'store']);
+        Route::get('/qa-profiles/{productType}', [QaProfileController::class, 'show']);
+        Route::patch('/qa-profiles/{qaProfile}', [QaProfileController::class, 'update']);
+        Route::delete('/qa-profiles/{qaProfile}', [QaProfileController::class, 'destroy']);
 
         Route::get('/webhooks', [\App\Http\Controllers\Api\V1\WebhookController::class, 'index']);
         Route::get('/webhook-event-types', [\App\Http\Controllers\Api\V1\WebhookController::class, 'eventTypes']);

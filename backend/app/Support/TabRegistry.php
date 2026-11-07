@@ -90,6 +90,7 @@ class TabRegistry
         'maintenance' => ['label' => 'Maintenance', 'prefixes' => [
             '/admin/maintenance-events', '/admin/maintenance-schedules', '/admin/tools', '/admin/cost-sources',
             '/admin/inspection-plans', '/admin/quality-control-triggers',
+            '/admin/qa-profiles',
             '/admin/quality-tasks', '/admin/oee',
         ]],
         // Its own tab rather than a corner of Maintenance: the shift monitor is

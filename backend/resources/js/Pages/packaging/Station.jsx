@@ -7,7 +7,7 @@ import AppLayout from '../../layouts/AppLayout';
 import OperatorLayout from '../../layouts/OperatorLayout';
 import LabelPreviewModal from '../../components/LabelPreviewModal';
 import useScanBuffer from '../../lib/useScanBuffer';
-import { parseScanPayload } from '../../lib/scanPayload';
+import { parseScanPayload, qaItemsFor } from '../../lib/scanPayload';
 import LabelPrintMenu from '../../components/LabelPrintMenu';
 import { __, formatTime } from '../../lib/i18n';
 import { readParam, writeParams } from '../../lib/urlState';
@@ -67,6 +67,10 @@ export default function Station() {
     const [weighing, setWeighing] = useState(null); // { psn, expected, tolerance }
     const [weight, setWeight] = useState('');
     const weightRef = useRef(null);
+    // QA pre-scan gate: the server refuses the scan until the product type's
+    // checklist passes (needs_qa) or a failed check gets a disposition.
+    const [qaPrompt, setQaPrompt] = useState(null); // { psn, profile, values, decision, errors, mode }
+    const qaValue = (id, value) => setQaPrompt((p) => (p ? { ...p, values: { ...p.values, [id]: value } } : p));
     const [cartonLabel, setCartonLabel] = useState(null); // { unit?, pdf, zpl?, title?, subtitle? } shown in the preview modal
     // Labels arrive faster than they are printed: the unit's, then the carton it
     // just filled, then the pallet that carton filled. Each waits its turn
@@ -447,13 +451,19 @@ export default function Station() {
 
     // The packing step of the scanned unit's order says how many go in a box.
     // Scan the process serial number to open the matching carton label for printing.
-    const submitPsnLabel = useCallback(async (e) => {
+    const submitPsnLabel = useCallback(async (e, qaOverride) => {
         e?.preventDefault();
-        const term = (weighing?.psn ?? psn).trim();
+        const activeQa = qaOverride ?? qaPrompt;
+        const term = (activeQa?.psn ?? weighing?.psn ?? psn).trim();
         if (!term || psnBusy) return;
         if (weighing && weight.trim() === '') { weightRef.current?.focus(); return; }
         setPsnBusy(true);
         try {
+            const qaPayload = activeQa ? {
+                items: qaItemsFor(activeQa.profile, activeQa.values),
+                ...(activeQa.decision ? { decision: activeQa.decision } : {}),
+                ...(activeQa.note ? { note: activeQa.note } : {}),
+            } : null;
             const res = await fetch('/packaging/scan-unit', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf(), 'X-Requested-With': 'XMLHttpRequest' },
@@ -461,7 +471,13 @@ export default function Station() {
                 // for an order that packs into cartons.
                 // On "auto" the server may also swap the bench's box for one of the unit's own
                 // order (the open carton belongs to another order) instead of refusing the unit.
-                body: JSON.stringify({ psn: term, ...scanDestination(), auto_carton: scanTarget === 'auto', weight_g: weighing ? Number(weight.replace(',', '.')) : undefined }),
+                body: JSON.stringify({
+                    psn: term,
+                    ...scanDestination(),
+                    auto_carton: scanTarget === 'auto',
+                    weight_g: weighing ? Number(weight.replace(',', '.')) : undefined,
+                    ...(qaPayload ? { qa: qaPayload } : {}),
+                }),
             });
             const data = await res.json();
             if (!res.ok && data.needs_weight) {
@@ -474,7 +490,32 @@ export default function Station() {
                 const step = packingSteps.find((st) => st.id === data.packing_step_id);
                 if (step) openPicks(step);
             }
+            if (!res.ok && data.needs_qa) {
+                setQaPrompt({
+                    psn: term,
+                    profile: data.qa_profile ?? activeQa?.profile ?? null,
+                    values: activeQa?.values ?? {},
+                    decision: null,
+                    errors: data.qa_errors ?? [],
+                    mode: 'needs_qa',
+                });
+            }
+            if (!res.ok && data.quality_failed) {
+                if (data.unit_status) {
+                    setQaPrompt(null);
+                } else {
+                    setQaPrompt({
+                        psn: term,
+                        profile: data.qa_profile ?? activeQa?.profile ?? null,
+                        values: activeQa?.values ?? {},
+                        decision: activeQa?.decision ?? null,
+                        errors: data.qa_errors ?? [],
+                        mode: 'quality_failed',
+                    });
+                }
+            }
             if (res.ok) {
+                setQaPrompt(null);
                 setPsnResult({ success: true, alreadyPacked: data.already_packed === true, unit: data.unit, scanned_at: formatTime(new Date()) });
                 setFlash('success');
                 // A unit labelled upstream only needs the confirmation; the print
@@ -503,7 +544,15 @@ export default function Station() {
             setPsnBusy(false);
         }
         setTimeout(() => setFlash(null), 2000);
-    }, [psn, psnBusy, weighing, weight, activeCarton, activePallet, scanTarget, cartons, openPallets, packingSteps, loadCartonUnits, loadCartons, fetchOpenPallets, loadPackingSteps, closeCarton, onPalletClosed, showLabel, openPicks]);
+    }, [psn, psnBusy, weighing, weight, qaPrompt, activeCarton, activePallet, scanTarget, cartons, openPallets, packingSteps, loadCartonUnits, loadCartons, fetchOpenPallets, loadPackingSteps, closeCarton, onPalletClosed, showLabel, openPicks]);
+
+    // A failed QA check needs a disposition before the unit can leave the bench.
+    const submitQaDecision = (decision) => {
+        if (!qaPrompt || psnBusy) return;
+        const next = { ...qaPrompt, decision };
+        setQaPrompt(next);
+        submitPsnLabel(null, next);
+    };
 
     const createPallet = useCallback(async () => {
         if (!palletWoId || palletBusy) return;
@@ -1023,6 +1072,63 @@ export default function Station() {
                     <p className="mt-3 text-[11.5px] text-om-faint">
                         {__('Scan the PSN or the serial number. The unit is packed into the open carton of its order (a unit of another order gets its own), or straight onto the active pallet, and its label is shown for printing. Closing the carton prints the list of units inside.')}
                     </p>
+                    <Modal
+                        open={qaPrompt != null}
+                        onClose={() => setQaPrompt(null)}
+                        title={qaPrompt?.mode === 'quality_failed' ? __('QA failed') : __('QA required')}
+                        subtitle={qaPrompt?.profile ? `${qaPrompt.profile.product_type_code} · v${qaPrompt.profile.version}` : qaPrompt?.psn}
+                        closeLabel={__('Close')}
+                        footer={(
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                                {qaPrompt?.mode === 'quality_failed' ? (
+                                    <>
+                                        <Button variant="secondary" disabled={psnBusy} onClick={() => submitQaDecision('rework')}>{__('Rework')}</Button>
+                                        <Button variant="outline" disabled={psnBusy} onClick={() => submitQaDecision('recut')}>{__('Re-cut')}</Button>
+                                        <Button variant="danger" disabled={psnBusy} onClick={() => submitQaDecision('scrap')}>{__('Scrap')}</Button>
+                                    </>
+                                ) : (
+                                    <Button variant="primary" loading={psnBusy} disabled={psnBusy} onClick={() => submitPsnLabel(null, qaPrompt)}>{__('Save')}</Button>
+                                )}
+                            </div>
+                        )}
+                    >
+                        {qaPrompt && (
+                            <div className="space-y-4">
+                                <p className="text-[13px] text-om-ink">{__('Complete the checklist before the unit can be packed.')}</p>
+                                {qaPrompt.errors?.length > 0 && (
+                                    <InlineAlert severity="error" title={qaPrompt.errors.join(' · ')} />
+                                )}
+                                {(qaPrompt.profile?.checklist_json ?? []).map((item) => (
+                                    <div key={item.id}>
+                                        <label htmlFor={`qa-${item.id}`} className={FIELD_LABEL}>
+                                            {item.label || item.id}{item.required ? ' *' : ''}
+                                        </label>
+                                        {item.type === 'bool' ? (
+                                            <label className="flex items-center gap-2 text-[13px] text-om-ink">
+                                                <input
+                                                    id={`qa-${item.id}`}
+                                                    type="checkbox"
+                                                    className="size-4 accent-om-ink"
+                                                    checked={qaPrompt.values[item.id] === true}
+                                                    onChange={(e) => qaValue(item.id, e.target.checked)}
+                                                />
+                                                {__('Pass')}
+                                            </label>
+                                        ) : (
+                                            <input
+                                                id={`qa-${item.id}`}
+                                                type={item.type === 'number' ? 'number' : 'text'}
+                                                inputMode={item.type === 'number' ? 'decimal' : undefined}
+                                                className="h-10 w-full rounded-om border border-om-line bg-om-card px-3 font-mono text-[13px] text-om-ink"
+                                                value={qaPrompt.values[item.id] ?? ''}
+                                                onChange={(e) => qaValue(item.id, e.target.value)}
+                                            />
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </Modal>
                     <Modal
                         open={pickStep != null}
                         onClose={() => setPickStep(null)}

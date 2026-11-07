@@ -20,4 +20,27 @@ export function parseScanPayload(raw) {
     return value;
 }
 
+/**
+ * Build the QA item list sent to the server from a profile checklist and the
+ * values collected in the modal. Missing required items are sent explicitly
+ * (a `bool` as `false`, everything else as `''`) so an unticked checkbox fails
+ * QA instead of being reported as a missing field.
+ */
+export function qaItemsFor(profile, values = {}) {
+    const result = [];
+    const collected = values ?? {};
+
+    for (const item of profile?.checklist_json ?? []) {
+        if (!item || item.id == null) continue;
+
+        if (Object.prototype.hasOwnProperty.call(collected, item.id)) {
+            result.push({ id: item.id, value: collected[item.id] });
+        } else if (item.required) {
+            result.push({ id: item.id, value: item.type === 'bool' ? false : '' });
+        }
+    }
+
+    return result;
+}
+
 export default parseScanPayload;
