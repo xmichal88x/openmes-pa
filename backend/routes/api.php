@@ -259,8 +259,9 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     Route::post('/serial-units', [\App\Http\Controllers\Api\V1\SerialUnitController::class, 'store']);
     Route::post('/serial-units/{serialUnit}/steps', [\App\Http\Controllers\Api\V1\SerialUnitController::class, 'recordStep']);
     Route::post('/serial-units/{serialUnit}/components', [\App\Http\Controllers\Api\V1\SerialUnitController::class, 'bindComponent']);
-    Route::post('/serial-units/{serialUnit}/block', [\App\Http\Controllers\Api\V1\SerialUnitController::class, 'block']);
+    Route::post('/serial-units/{serialUnit}/block', [\App\Http\Controllers\Api\V1\SerialUnitController::class, 'block'])->middleware('role:Operator|Supervisor|Admin');
     Route::post('/serial-units/{serialUnit}/unblock', [\App\Http\Controllers\Api\V1\SerialUnitController::class, 'unblock']);
+    Route::post('/serial-units/{serialUnit}/scrap', [\App\Http\Controllers\Api\V1\SerialUnitController::class, 'scrap'])->middleware('role:Operator|Supervisor|Admin');
     // A tester posts the run it just finished (its own JSONL, or the native JSON shape).
     Route::post('/test-runs', [\App\Http\Controllers\Api\V1\TestRunController::class, 'store'])->middleware('throttle:120,1');
 

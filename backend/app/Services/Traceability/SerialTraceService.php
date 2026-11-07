@@ -495,6 +495,7 @@ class SerialTraceService
                     'notes' => $reason,
                 ]);
             }
+            $this->recomputePallet($unit);
 
             return $unit->fresh();
         });

@@ -7,6 +7,7 @@ use App\Http\Requests\Api\V1\BindUnitComponentApiRequest;
 use App\Http\Requests\Api\V1\RecordSerialUnitStepRequest;
 use App\Http\Requests\Api\V1\StoreSerialUnitRequest;
 use App\Http\Requests\BlockUnitRequest;
+use App\Http\Requests\ScrapUnitRequest;
 use App\Http\Requests\UnblockUnitRequest;
 use App\Models\BatchStep;
 use App\Models\ScrapReason;
@@ -90,6 +91,18 @@ class SerialUnitController extends Controller
         }
 
         return response()->json(['data' => $unit]);
+    }
+
+    /** Scrap a unit - final, so the reason is mandatory. */
+    public function scrap(ScrapUnitRequest $request, SerialUnit $serialUnit): JsonResponse
+    {
+        try {
+            $unit = $this->serials->scrapUnit($serialUnit, $request->user(), $request->validated('reason'));
+        } catch (BindingException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json(['message' => __('Unit :sn scrapped.', ['sn' => $unit->display_id]), 'data' => $unit]);
     }
 
     public function recordStep(RecordSerialUnitStepRequest $request, SerialUnit $serialUnit): JsonResponse
