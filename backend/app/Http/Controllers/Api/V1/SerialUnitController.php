@@ -27,6 +27,8 @@ class SerialUnitController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        $limit = min(max((int) $request->query('per_page', 100), 1), 1000);
+
         $units = SerialUnit::query()
             ->when($request->query('work_order_id'), fn ($q, $id) => $q->where('work_order_id', $id))
             ->when($request->query('status'), fn ($q, $s) => $q->where('status', $s))
@@ -36,7 +38,7 @@ class SerialUnitController extends Controller
                 fn ($qq) => $qq->where('serial_no', 'like', "%{$s}%")->orWhere('psn', 'like', "%{$s}%")
             ))
             ->orderByDesc('id')
-            ->limit(100)
+            ->limit($limit)
             ->get();
 
         return response()->json(['data' => $units]);
