@@ -8,6 +8,7 @@ use App\Http\Requests\BindUnitLabelRequest;
 use App\Http\Requests\BlockUnitRequest;
 use App\Http\Requests\IssueUnitBatchRequest;
 use App\Http\Requests\IssueUnitIdentifierRequest;
+use App\Http\Requests\RecutUnitRequest;
 use App\Http\Requests\RegisterSubassemblyRequest;
 use App\Http\Requests\ScrapUnitRequest;
 use App\Http\Requests\StartUnitRequest;
@@ -315,6 +316,23 @@ class UnitLabelStationController extends Controller
         }
 
         return response()->json(['unit' => $this->payload($unit), 'message' => __('Unit :sn scrapped.', ['sn' => $unit->display_id])]);
+    }
+
+    /** Send a unit whose rework failed to re-cut - scrapped with a `recut` decision. */
+    public function recut(RecutUnitRequest $request, SerialUnit $serialUnit): JsonResponse
+    {
+        try {
+            $unit = $this->serials->recutUnit(
+                $serialUnit,
+                $request->user(),
+                $request->validated('reason'),
+                $request->session()->get('selected_workstation_id') ?: $request->user()->workstation_id,
+            );
+        } catch (BindingException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json(['unit' => $this->payload($unit), 'message' => __('Unit :sn sent to re-cut.', ['sn' => $unit->display_id])]);
     }
 
     /**

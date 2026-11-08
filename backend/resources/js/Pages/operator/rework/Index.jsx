@@ -73,6 +73,11 @@ export default function ReworkIndex() {
         (reason) => submit(unit, 'scrap', { reason }),
     );
 
+    const recut = (unit) => prompt(
+        { title: __('Send to re-cut'), label: __('Re-cut reason'), required: true },
+        (reason) => submit(unit, 'recut', { reason }),
+    );
+
     return (
         <>
             <Head title={__('Rework')} />
@@ -142,6 +147,13 @@ export default function ReworkIndex() {
                                             onClick={() => fail(unit)}
                                         >
                                             {__('Rework failed')}
+                                        </Button>
+                                        <Button
+                                            variant="secondary"
+                                            disabled={busyId === unit.id}
+                                            onClick={() => recut(unit)}
+                                        >
+                                            {__('Recut')}
                                         </Button>
                                     </span>
                                 </li>

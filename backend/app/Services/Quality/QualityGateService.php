@@ -234,6 +234,7 @@ class QualityGateService
                 'workstation_id' => $workstationId,
                 'exact_workstation' => true,
                 'result' => null,
+                'decision' => $decision,
                 'parameters' => [
                     'event' => 'quality_defect',
                     'stage' => 'packing',

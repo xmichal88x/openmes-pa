@@ -262,6 +262,12 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     Route::post('/serial-units/{serialUnit}/block', [\App\Http\Controllers\Api\V1\SerialUnitController::class, 'block'])->middleware('role:Operator|Supervisor|Admin');
     Route::post('/serial-units/{serialUnit}/unblock', [\App\Http\Controllers\Api\V1\SerialUnitController::class, 'unblock']);
     Route::post('/serial-units/{serialUnit}/scrap', [\App\Http\Controllers\Api\V1\SerialUnitController::class, 'scrap'])->middleware('role:Operator|Supervisor|Admin');
+    Route::post('/serial-units/{serialUnit}/recut', [\App\Http\Controllers\Api\V1\SerialUnitController::class, 'recut'])->middleware('role:Operator|Supervisor|Admin');
+
+    // Re-cut candidates (RQ-PA-214 P2): incremental cursor over QA `recut`
+    // decisions for the queue runtime. Tenant-scoped through `serialUnit`.
+    Route::get('/quality/recut-candidates', [\App\Http\Controllers\Api\V1\Quality\RecutCandidatesController::class, 'index']);
+
     // A tester posts the run it just finished (its own JSONL, or the native JSON shape).
     Route::post('/test-runs', [\App\Http\Controllers\Api\V1\TestRunController::class, 'store'])->middleware('throttle:120,1');
 

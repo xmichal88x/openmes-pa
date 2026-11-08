@@ -338,6 +338,7 @@ Route::middleware('auth')->group(function () {
         Route::post('/unit-labels/component', [UnitLabelStationController::class, 'component'])->name('unit-labels.component');
         Route::post('/unit-labels/issue', [UnitLabelStationController::class, 'issue'])->name('unit-labels.issue');
         Route::post('/unit-labels/{serialUnit}/scrap', [UnitLabelStationController::class, 'scrap'])->name('unit-labels.scrap');
+        Route::post('/unit-labels/{serialUnit}/recut', [UnitLabelStationController::class, 'recut'])->name('unit-labels.recut');
         Route::get('/unit-labels/components', [UnitLabelStationController::class, 'components'])->name('unit-labels.components');
         Route::post('/unit-labels/components/{component}/unbind', [UnitLabelStationController::class, 'unbindComponent'])->name('unit-labels.component-unbind');
         Route::post('/unit-labels/issue-batch', [UnitLabelStationController::class, 'issueBatch'])->name('unit-labels.issue-batch');

@@ -7340,5 +7340,9 @@
     "Fail rework": "Fail rework",
     "Rework passed": "Passed",
     "Rework failed": "Failed",
-    "No blocked units.": "No blocked units."
+    "No blocked units.": "No blocked units.",
+    "Recut": "Recut",
+    "Send to re-cut": "Send to re-cut",
+    "Re-cut reason": "Reason for re-cut",
+    "Unit :sn sent to re-cut.": "Unit :sn sent to re-cut."
 }

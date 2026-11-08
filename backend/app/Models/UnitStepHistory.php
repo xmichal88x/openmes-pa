@@ -23,6 +23,7 @@ class UnitStepHistory extends Model
         'operator_id',
         'parameters',
         'result',
+        'decision',
         'notes',
         'processed_at',
     ];

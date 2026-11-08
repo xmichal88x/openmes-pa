@@ -7432,5 +7432,9 @@
     "Fail rework": "Nie zaliczaj przeróbki",
     "Rework passed": "Zaliczone",
     "Rework failed": "Niezaliczone",
-    "No blocked units.": "Brak zablokowanych sztuk."
+    "No blocked units.": "Brak zablokowanych sztuk.",
+    "Recut": "Do docięcia",
+    "Send to re-cut": "Wyślij do docięcia",
+    "Re-cut reason": "Powód docięcia",
+    "Unit :sn sent to re-cut.": "Sztuka :sn wysłana do docięcia."
 }

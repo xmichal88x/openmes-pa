@@ -107,6 +107,11 @@ class SerialTraceService
                 'operator_id' => $operator->id,
                 'parameters' => $data['parameters'] ?? null,
                 'result' => $data['result'] ?? null,
+                // Internal QA decision only (rework / recut / scrap). Never trust
+                // the caller blindly: anything else is stored as "no decision".
+                'decision' => in_array($data['decision'] ?? null, ['rework', 'recut', 'scrap'], true)
+                    ? $data['decision']
+                    : null,
                 'notes' => $data['notes'] ?? null,
                 // An import passes the tester's own time so history reads in the
                 // order things happened, not the order files were loaded.
@@ -492,6 +497,35 @@ class SerialTraceService
                     'workstation_id' => $workstationId ?? $operator->workstation_id,
                     'parameters' => ['event' => 'scrapped'],
                     'result' => 'fail',
+                    'notes' => $reason,
+                ]);
+            }
+            $this->recomputePallet($unit);
+
+            return $unit->fresh();
+        });
+    }
+
+    /**
+     * Re-cut a unit whose rework failed - final for this serial. It is scrapped
+     * like a scrap, but the `recut` decision is what the queue turns into a
+     * re-cut ticket: the piece is cut again under a new serial.
+     *
+     * @throws BindingException when the unit already left the line
+     */
+    public function recutUnit(SerialUnit $unit, User $operator, string $reason, ?int $workstationId = null): SerialUnit
+    {
+        return DB::transaction(function () use ($unit, $operator, $reason, $workstationId) {
+            if ($unit->status === SerialUnit::STATUS_SHIPPED) {
+                throw new BindingException(__('Unit :sn is :status and can no longer be bound.', ['sn' => $unit->display_id, 'status' => $unit->status_label]));
+            }
+            if ($unit->status !== SerialUnit::STATUS_SCRAPPED) {
+                $unit->update(['status' => SerialUnit::STATUS_SCRAPPED]);
+                $this->recordStep($unit, $operator, null, [
+                    'workstation_id' => $workstationId ?? $operator->workstation_id,
+                    'parameters' => ['event' => 'scrapped', 'source' => 'rework'],
+                    'result' => 'fail',
+                    'decision' => 'recut',
                     'notes' => $reason,
                 ]);
             }
