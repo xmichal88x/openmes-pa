@@ -56,6 +56,7 @@ use App\Http\Controllers\Web\Operator\ScrapController as OperatorScrapController
 use App\Http\Controllers\Web\Operator\UnitLabelStationController;
 use App\Http\Controllers\Web\Operator\WorkOrderController as OperatorWorkOrderController;
 use App\Http\Controllers\Web\Operator\WorkstationController as OperatorWorkstationController;
+use App\Http\Controllers\Web\Packaging\AlphacamLabelController;
 use App\Http\Controllers\Web\Packaging\LabelPrintController;
 use App\Http\Controllers\Web\Packaging\LabelTemplateController;
 use App\Http\Controllers\Web\Packaging\PackagingBoxController;
@@ -1078,6 +1079,8 @@ Route::middleware('auth')->group(function () {
             Route::get('/work-order/{workOrder}/zpl', [LabelPrintController::class, 'workOrderZpl'])->name('work-order.zpl');
             Route::get('/finished-goods/{batch}/pdf', [LabelPrintController::class, 'finishedGoodsPdf'])->name('finished-goods.pdf');
             Route::get('/finished-goods/{batch}/zpl', [LabelPrintController::class, 'finishedGoodsZpl'])->name('finished-goods.zpl');
+            Route::get('/alphacam/{batchStep}', [AlphacamLabelController::class, 'index'])->name('alphacam.index');
+            Route::get('/alphacam/{batchStep}/pdf', [AlphacamLabelController::class, 'pdf'])->name('alphacam.pdf');
             Route::get('/workstation-step/{batchStep}/pdf', [LabelPrintController::class, 'batchStepPdf'])->name('workstation-step.pdf');
             Route::get('/workstation-step/{batchStep}/zpl', [LabelPrintController::class, 'batchStepZpl'])->name('workstation-step.zpl');
             Route::get('/pallet/{pallet}/pdf', [LabelPrintController::class, 'palletPdf'])->name('pallet.pdf');

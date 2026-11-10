@@ -6,6 +6,7 @@ import OperatorLayout from '../../layouts/OperatorLayout';
 import AppDataTable from '../../components/AppDataTable';
 import LineSync from '../../components/LineSync';
 import LabelPrintMenu from '../../components/LabelPrintMenu';
+import SheetLabelsMenu from '../../components/SheetLabelsMenu';
 import MachineCommandPanel from '../../components/MachineCommandPanel';
 import ModalShell from '../../components/ModalShell';
 import SharedSheetConfirmModal from '../../components/SharedSheetConfirmModal';
@@ -1227,13 +1228,8 @@ function BatchStepList({ steps, labelTemplates = [], stepPhotos = {}, stepMedia 
                                 </Button>
                             )}
 
-                            {/* Per-step label print (compact) */}
-                            <LabelPrintMenu
-                                kind="workstation-step"
-                                id={step.id}
-                                templates={labelTemplates}
-                                label={__('Label')}
-                            />
+                            {/* Per-step sheet labels: the PDFs PA already generated for the batch */}
+                            <SheetLabelsMenu step={step} />
 
                             {machineCommandCaps?.[step.id] && (
                                 <MachineCommandPanel stepId={step.id} caps={machineCommandCaps[step.id]} className="w-full" />

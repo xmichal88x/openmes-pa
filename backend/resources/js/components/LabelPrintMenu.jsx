@@ -11,7 +11,7 @@ import { __ } from '../lib/i18n';
  * than one active template of the type, the preview lets you pick one.
  *
  * Props:
- *   kind      — 'work-order' | 'finished-goods' | 'workstation-step' | 'pallet' | 'serial-unit'
+ *   kind      — 'work-order' | 'finished-goods' | 'pallet' | 'serial-unit'
  *   id        — entity id
  *   templates — all active label templates [{id,name,type,size,barcode_format,is_default}]
  *   label     — button text (default 'Print Label')
@@ -21,7 +21,6 @@ import { __ } from '../lib/i18n';
 const KIND_TO_TYPE = {
     'work-order': 'work_order',
     'finished-goods': 'finished_goods',
-    'workstation-step': 'workstation_step',
     pallet: 'pallet',
     'serial-unit': 'serial_unit',
     carton: 'carton',
