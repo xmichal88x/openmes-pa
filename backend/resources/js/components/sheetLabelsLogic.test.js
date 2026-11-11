@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
     hasSheetMap,
     normalizeSheetLabels,
+    sameOriginPath,
     sheetLabelSummary,
     sheetLabelsEndpoint,
+    sheetMapUrl,
     sheetName,
     shouldShowSheetLabels,
 } from './sheetLabelsLogic';
@@ -96,5 +98,33 @@ describe('sheetName', () => {
         expect(sheetName(null)).toBe('—');
         expect(sheetName(undefined)).toBe('—');
         expect(sheetName({ sheet: '' })).toBe('—');
+    });
+});
+
+describe('sameOriginPath', () => {
+    it('keeps relative paths untouched', () => {
+        expect(sameOriginPath('/packaging/labels/alphacam/675/map?label_batch_id=abc')).toBe('/packaging/labels/alphacam/675/map?label_batch_id=abc');
+    });
+
+    it('strips the origin from an absolute URL', () => {
+        expect(sameOriginPath('https://mes.edeseczka.pl/packaging/labels/alphacam/675/map?label_batch_id=abc'))
+            .toBe('/packaging/labels/alphacam/675/map?label_batch_id=abc');
+        expect(sameOriginPath('http://192.168.100.122/packaging/x?y=1')).toBe('/packaging/x?y=1');
+    });
+
+    it('returns empty for empty/non-string input', () => {
+        expect(sameOriginPath(null)).toBe('');
+        expect(sameOriginPath(undefined)).toBe('');
+        expect(sameOriginPath('')).toBe('');
+        expect(sameOriginPath(42)).toBe('');
+    });
+});
+
+describe('sheetMapUrl', () => {
+    it('extracts a same-origin path from the row map_pdf', () => {
+        expect(sheetMapUrl({ map_pdf: 'https://mes.edeseczka.pl/packaging/labels/alphacam/1/map?label_batch_id=a' }))
+            .toBe('/packaging/labels/alphacam/1/map?label_batch_id=a');
+        expect(sheetMapUrl({ map_pdf: null })).toBe('');
+        expect(sheetMapUrl(null)).toBe('');
     });
 });

@@ -4,10 +4,10 @@ import LabelPreviewModal from './LabelPreviewModal';
 import ModalShell from './ModalShell';
 import { __ } from '../lib/i18n';
 import {
-    hasSheetMap,
     normalizeSheetLabels,
     sheetLabelSummary,
     sheetLabelsEndpoint,
+    sheetMapUrl,
     sheetName,
     shouldShowSheetLabels,
 } from './sheetLabelsLogic';
@@ -35,12 +35,13 @@ export default function SheetLabelsMenu({ step, size = 'sm', variant = 'outline'
     if (!shouldShowSheetLabels(step)) return null;
 
     const closePreview = () => {
-        if (preview?.revokeUrl) URL.revokeObjectURL(preview.revokeUrl);
         setPreview(null);
     };
 
     const openMap = async (row) => {
-        if (!hasSheetMap(row)) {
+        const mapUrl = sheetMapUrl(row);
+
+        if (!mapUrl) {
             setMapError({ id: row?.label_batch_id, message: __('Sheet map unavailable for this sheet.') });
             return;
         }
@@ -49,7 +50,7 @@ export default function SheetLabelsMenu({ step, size = 'sm', variant = 'outline'
         setMapLoadingId(row.label_batch_id);
 
         try {
-            const res = await fetch(row.map_pdf, {
+            const res = await fetch(mapUrl, {
                 headers: { Accept: 'application/pdf' },
                 credentials: 'same-origin',
             });
@@ -59,12 +60,9 @@ export default function SheetLabelsMenu({ step, size = 'sm', variant = 'outline'
                 return;
             }
 
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
             setPreview({
                 title: __('Sheet map: :sheet', { sheet: sheetName(row) }),
-                pdfUrl: url,
-                revokeUrl: url,
+                pdfUrl: mapUrl,
             });
         } catch {
             setMapError({ id: row.label_batch_id, message: __('Sheet map unavailable for this sheet.') });
@@ -148,7 +146,7 @@ export default function SheetLabelsMenu({ step, size = 'sm', variant = 'outline'
                                                             pdfUrl: row.labels_pdf,
                                                         })}
                                                     >
-                                                        {__('Print')}
+                                                        {__('Labels')}
                                                     </Button>
                                                     <Button
                                                         variant="outline"

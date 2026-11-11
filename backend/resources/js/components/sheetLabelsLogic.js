@@ -40,3 +40,18 @@ export function sheetName(row) {
 export function hasSheetMap(row) {
     return typeof row?.map_pdf === 'string' && row.map_pdf !== '';
 }
+
+export function sameOriginPath(url) {
+    if (typeof url !== 'string' || url === '') return '';
+    if (url.startsWith('/')) return url;
+    try {
+        const parsed = new URL(url, 'http://local');
+        return `${parsed.pathname}${parsed.search}`;
+    } catch {
+        return url;
+    }
+}
+
+export function sheetMapUrl(row) {
+    return sameOriginPath(row?.map_pdf);
+}
