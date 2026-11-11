@@ -46,6 +46,9 @@ services:
       APP_NAME: ${APP_NAME:-OpenMES}
       APP_ENV: ${APP_ENV:-production}
       QA_ENFORCEMENT: ${QA_ENFORCEMENT:-0}
+      ALPHACAM_LABELS_BASE_URL: ${ALPHACAM_LABELS_BASE_URL:-}
+      ALPHACAM_LABELS_TOKEN: ${ALPHACAM_LABELS_TOKEN:-}
+      ALPHACAM_LABELS_TIMEOUT: ${ALPHACAM_LABELS_TIMEOUT:-5}
       # Plant timezone: every rendered timestamp, report boundary and scheduled job
       # uses it (config/app.php → app.timezone, and the `timezone` Inertia prop).
       # Without this passthrough a Docker install is stuck on UTC.
@@ -127,6 +130,9 @@ services:
       APP_NAME: ${APP_NAME:-OpenMES}
       APP_ENV: ${APP_ENV:-production}
       QA_ENFORCEMENT: ${QA_ENFORCEMENT:-0}
+      ALPHACAM_LABELS_BASE_URL: ${ALPHACAM_LABELS_BASE_URL:-}
+      ALPHACAM_LABELS_TOKEN: ${ALPHACAM_LABELS_TOKEN:-}
+      ALPHACAM_LABELS_TIMEOUT: ${ALPHACAM_LABELS_TIMEOUT:-5}
       # Plant timezone: every rendered timestamp, report boundary and scheduled job
       # uses it (config/app.php → app.timezone, and the `timezone` Inertia prop).
       # Without this passthrough a Docker install is stuck on UTC.
@@ -174,6 +180,9 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-production}
       QA_ENFORCEMENT: ${QA_ENFORCEMENT:-0}
+      ALPHACAM_LABELS_BASE_URL: ${ALPHACAM_LABELS_BASE_URL:-}
+      ALPHACAM_LABELS_TOKEN: ${ALPHACAM_LABELS_TOKEN:-}
+      ALPHACAM_LABELS_TIMEOUT: ${ALPHACAM_LABELS_TIMEOUT:-5}
       # Plant timezone: every rendered timestamp, report boundary and scheduled job
       # uses it (config/app.php → app.timezone, and the `timezone` Inertia prop).
       # Without this passthrough a Docker install is stuck on UTC.
@@ -225,6 +234,9 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-production}
       QA_ENFORCEMENT: ${QA_ENFORCEMENT:-0}
+      ALPHACAM_LABELS_BASE_URL: ${ALPHACAM_LABELS_BASE_URL:-}
+      ALPHACAM_LABELS_TOKEN: ${ALPHACAM_LABELS_TOKEN:-}
+      ALPHACAM_LABELS_TIMEOUT: ${ALPHACAM_LABELS_TIMEOUT:-5}
       # Plant timezone: every rendered timestamp, report boundary and scheduled job
       # uses it (config/app.php → app.timezone, and the `timezone` Inertia prop).
       # Without this passthrough a Docker install is stuck on UTC.
@@ -301,6 +313,9 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-production}
       QA_ENFORCEMENT: ${QA_ENFORCEMENT:-0}
+      ALPHACAM_LABELS_BASE_URL: ${ALPHACAM_LABELS_BASE_URL:-}
+      ALPHACAM_LABELS_TOKEN: ${ALPHACAM_LABELS_TOKEN:-}
+      ALPHACAM_LABELS_TIMEOUT: ${ALPHACAM_LABELS_TIMEOUT:-5}
       # Plant timezone: every rendered timestamp, report boundary and scheduled job
       # uses it (config/app.php → app.timezone, and the `timezone` Inertia prop).
       # Without this passthrough a Docker install is stuck on UTC.
