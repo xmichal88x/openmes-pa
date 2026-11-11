@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+    hasSheetMap,
     normalizeSheetLabels,
     sheetLabelSummary,
     sheetLabelsEndpoint,
+    sheetName,
     shouldShowSheetLabels,
 } from './sheetLabelsLogic';
 
@@ -65,5 +67,34 @@ describe('sheetLabelSummary', () => {
         expect(summary).not.toContain('/packaging');
         expect(summary).not.toContain('http');
         expect(summary).toBe('Arkusz A1 · 6 etykiet');
+    });
+});
+
+describe('hasSheetMap', () => {
+    it('is true only for a non-empty string map_pdf', () => {
+        expect(hasSheetMap({ map_pdf: '/packaging/labels/alphacam/12/map?label_batch_id=abc' })).toBe(true);
+        expect(hasSheetMap({ map_pdf: 'x' })).toBe(true);
+    });
+
+    it('is false for null, undefined, empty or non-string map_pdf', () => {
+        expect(hasSheetMap({ map_pdf: null })).toBe(false);
+        expect(hasSheetMap({ map_pdf: '' })).toBe(false);
+        expect(hasSheetMap({})).toBe(false);
+        expect(hasSheetMap(null)).toBe(false);
+        expect(hasSheetMap(undefined)).toBe(false);
+        expect(hasSheetMap({ map_pdf: 42 })).toBe(false);
+    });
+});
+
+describe('sheetName', () => {
+    it('returns the sheet name as a string', () => {
+        expect(sheetName({ sheet: 'Arkusz A1' })).toBe('Arkusz A1');
+    });
+
+    it('falls back to an em dash when the name is missing', () => {
+        expect(sheetName({})).toBe('—');
+        expect(sheetName(null)).toBe('—');
+        expect(sheetName(undefined)).toBe('—');
+        expect(sheetName({ sheet: '' })).toBe('—');
     });
 });

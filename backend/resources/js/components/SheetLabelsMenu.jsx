@@ -4,9 +4,11 @@ import LabelPreviewModal from './LabelPreviewModal';
 import ModalShell from './ModalShell';
 import { __ } from '../lib/i18n';
 import {
+    hasSheetMap,
     normalizeSheetLabels,
     sheetLabelSummary,
     sheetLabelsEndpoint,
+    sheetName,
     shouldShowSheetLabels,
 } from './sheetLabelsLogic';
 
@@ -27,15 +29,57 @@ export default function SheetLabelsMenu({ step, size = 'sm', variant = 'outline'
     const [error, setError] = useState(null);
     const [sheets, setSheets] = useState([]);
     const [preview, setPreview] = useState(null);
+    const [mapError, setMapError] = useState(null);
+    const [mapLoadingId, setMapLoadingId] = useState(null);
 
     if (!shouldShowSheetLabels(step)) return null;
+
+    const closePreview = () => {
+        if (preview?.revokeUrl) URL.revokeObjectURL(preview.revokeUrl);
+        setPreview(null);
+    };
+
+    const openMap = async (row) => {
+        if (!hasSheetMap(row)) {
+            setMapError({ id: row?.label_batch_id, message: __('Sheet map unavailable for this sheet.') });
+            return;
+        }
+
+        setMapError(null);
+        setMapLoadingId(row.label_batch_id);
+
+        try {
+            const res = await fetch(row.map_pdf, {
+                headers: { Accept: 'application/pdf' },
+                credentials: 'same-origin',
+            });
+
+            if (!res.ok) {
+                setMapError({ id: row.label_batch_id, message: __('Sheet map unavailable for this sheet.') });
+                return;
+            }
+
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            setPreview({
+                title: __('Sheet map: :sheet', { sheet: sheetName(row) }),
+                pdfUrl: url,
+                revokeUrl: url,
+            });
+        } catch {
+            setMapError({ id: row.label_batch_id, message: __('Sheet map unavailable for this sheet.') });
+        } finally {
+            setMapLoadingId(null);
+        }
+    };
 
     const openMenu = async () => {
         setOpen(true);
         setLoading(true);
         setError(null);
         setSheets([]);
-        setPreview(null);
+        setMapError(null);
+        closePreview();
 
         try {
             const res = await fetch(sheetLabelsEndpoint(step.id), {
@@ -59,7 +103,7 @@ export default function SheetLabelsMenu({ step, size = 'sm', variant = 'outline'
 
     const closeMenu = () => {
         setOpen(false);
-        setPreview(null);
+        closePreview();
     };
 
     return (
@@ -81,28 +125,48 @@ export default function SheetLabelsMenu({ step, size = 'sm', variant = 'outline'
                                 {sheets.map((row, index) => (
                                     <li
                                         key={row?.label_batch_id ?? `${row?.sheet ?? 'sheet'}-${index}`}
-                                        className="flex items-center justify-between gap-3 rounded-om-sm border border-om-line px-3 py-2"
+                                        className="rounded-om-sm border border-om-line px-3 py-2"
                                     >
-                                        <div className="min-w-0">
-                                            <div className="truncate text-[13px] font-medium text-om-ink">{sheetLabelSummary(row)}</div>
-                                            {row?.order_no != null && (
-                                                <div className="font-mono text-[11px] text-om-faint">
-                                                    {__('Order :no', { no: row.order_no })}
+                                        <div className="flex flex-col gap-2">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <div className="truncate text-[13px] font-medium text-om-ink">{sheetLabelSummary(row)}</div>
+                                                    {row?.order_no != null && (
+                                                        <div className="font-mono text-[11px] text-om-faint">
+                                                            {__('Order :no', { no: row.order_no })}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        leftIcon={<Icon name="printer" size={14} />}
+                                                        disabled={!row?.labels_pdf}
+                                                        onClick={() => setPreview({
+                                                            title: __('Sheet labels: :sheet', { sheet: row?.sheet ?? '—' }),
+                                                            pdfUrl: row.labels_pdf,
+                                                        })}
+                                                    >
+                                                        {__('Print')}
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        leftIcon={<Icon name="map" size={14} />}
+                                                        disabled={mapLoadingId === row?.label_batch_id}
+                                                        onClick={() => openMap(row)}
+                                                    >
+                                                        {__('Sheet map')}
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                            {row?.label_batch_id != null && mapError?.id === row.label_batch_id && (
+                                                <div role="alert" className="text-sm text-om-blocked">
+                                                    {mapError.message}
                                                 </div>
                                             )}
                                         </div>
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            leftIcon={<Icon name="printer" size={14} />}
-                                            disabled={!row?.labels_pdf}
-                                            onClick={() => setPreview({
-                                                title: __('Sheet labels: :sheet', { sheet: row?.sheet ?? '—' }),
-                                                pdfUrl: row.labels_pdf,
-                                            })}
-                                        >
-                                            {__('Print')}
-                                        </Button>
                                     </li>
                                 ))}
                             </ul>
@@ -116,7 +180,7 @@ export default function SheetLabelsMenu({ step, size = 'sm', variant = 'outline'
 
             <LabelPreviewModal
                 open={preview != null}
-                onClose={() => setPreview(null)}
+                onClose={closePreview}
                 title={preview?.title}
                 pdfUrl={preview?.pdfUrl}
                 zplUrl={null}

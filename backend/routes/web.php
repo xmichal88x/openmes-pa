@@ -1081,6 +1081,7 @@ Route::middleware('auth')->group(function () {
             Route::get('/finished-goods/{batch}/zpl', [LabelPrintController::class, 'finishedGoodsZpl'])->name('finished-goods.zpl');
             Route::get('/alphacam/{batchStep}', [AlphacamLabelController::class, 'index'])->name('alphacam.index');
             Route::get('/alphacam/{batchStep}/pdf', [AlphacamLabelController::class, 'pdf'])->name('alphacam.pdf');
+            Route::get('/alphacam/{batchStep}/map', [AlphacamLabelController::class, 'map'])->name('alphacam.map');
             Route::get('/workstation-step/{batchStep}/pdf', [LabelPrintController::class, 'batchStepPdf'])->name('workstation-step.pdf');
             Route::get('/workstation-step/{batchStep}/zpl', [LabelPrintController::class, 'batchStepZpl'])->name('workstation-step.zpl');
             Route::get('/pallet/{pallet}/pdf', [LabelPrintController::class, 'palletPdf'])->name('pallet.pdf');

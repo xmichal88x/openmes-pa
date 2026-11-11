@@ -32,3 +32,11 @@ export function sheetLabelSummary(row) {
     const count = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
     return `${sheet} · ${count} ${labelWord(count)}`;
 }
+
+export function sheetName(row) {
+    return row?.sheet ? String(row.sheet) : '—';
+}
+
+export function hasSheetMap(row) {
+    return typeof row?.map_pdf === 'string' && row.map_pdf !== '';
+}

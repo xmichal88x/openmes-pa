@@ -49,6 +49,13 @@ class AlphacamLabelController extends Controller
                         'batchStep' => $batchStep,
                         'label_batch_id' => $row['label_batch_id'],
                     ]);
+
+                    if (array_key_exists('map_pdf', $row) && $row['map_pdf'] !== null) {
+                        $row['map_pdf'] = route('packaging.labels.alphacam.map', [
+                            'batchStep' => $batchStep,
+                            'label_batch_id' => $row['label_batch_id'],
+                        ]);
+                    }
                 }
 
                 return $row;
@@ -64,6 +71,16 @@ class AlphacamLabelController extends Controller
     }
 
     public function pdf(Request $request, BatchStep $batchStep): StreamedResponse|JsonResponse
+    {
+        return $this->streamPdf($request, $batchStep, 'labels.pdf');
+    }
+
+    public function map(Request $request, BatchStep $batchStep): StreamedResponse|JsonResponse
+    {
+        return $this->streamPdf($request, $batchStep, 'map.pdf');
+    }
+
+    private function streamPdf(Request $request, BatchStep $batchStep, string $file): StreamedResponse|JsonResponse
     {
         $labelBatchId = (string) $request->query('label_batch_id', '');
 
@@ -102,13 +119,17 @@ class AlphacamLabelController extends Controller
 
         try {
             $pdf = $client->withOptions(['stream' => true])
-                ->get('/api/labels/'.$labelBatchId.'/labels.pdf');
+                ->get('/api/labels/'.$labelBatchId.'/'.$file);
         } catch (ConnectionException) {
             return response()->json(['message' => __('AlphaCAM labels service is unreachable.')], 503);
         }
 
         if ($pdf->status() === 404) {
-            return response()->json(['message' => __('Label PDF not found.')], 404);
+            $message = $file === 'map.pdf'
+                ? __('Sheet map PDF not found.')
+                : __('Label PDF not found.');
+
+            return response()->json(['message' => $message], 404);
         }
 
         if ($pdf->failed()) {
@@ -116,7 +137,8 @@ class AlphacamLabelController extends Controller
         }
 
         $body = $pdf->toPsrResponse()->getBody();
-        $filename = 'labels-'.$batchStep->batch_id.'-'.$labelBatchId.'.pdf';
+        $prefix = $file === 'map.pdf' ? 'map' : 'labels';
+        $filename = $prefix.'-'.$batchStep->batch_id.'-'.$labelBatchId.'.pdf';
 
         return response()->stream(function () use ($body) {
             while (! $body->eof()) {
