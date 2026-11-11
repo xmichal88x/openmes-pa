@@ -22,6 +22,7 @@ import { packageMeta, isInteractive, formatBytes } from '../../components/engine
 import { apiGet, apiCall } from '../../lib/http';
 import { customFieldInitial, customFieldProps, submitForm } from '../../lib/customFieldForm';
 import { __, formatDate, formatDateTime, formatNumber } from '../../lib/i18n';
+import { issueTypeLabel, isSuspendedCycleIssueType } from '../../lib/issueTypeLabel';
 import { readParam, writeParams } from '../../lib/urlState';
 import { serialStatusBadge, serialStatusLabel } from '../../lib/serialStatus';
 import { historyTitle } from '../admin/traceability/results';
@@ -2089,9 +2090,15 @@ function ReportIssueModal({ workOrder, issueTypes, customFields = [], onClose })
         description: '',
         ...customFieldInitial(),
     });
+    const [titleTouched, setTitleTouched] = useState(false);
+
+    const selectedType = issueTypes.find((type) => String(type.id) === String(form.data.issue_type_id));
+    const suspended = isSuspendedCycleIssueType(selectedType);
 
     const submit = (e) => {
         e.preventDefault();
+        if (!form.data.issue_type_id || !form.data.title.trim()) return;
+        if (suspended && form.data.description.trim().length < 10) return;
         submitForm(form, 'post', '/operator/issue', { onSuccess: onClose });
     };
 
@@ -2107,10 +2114,20 @@ function ReportIssueModal({ workOrder, issueTypes, customFields = [], onClose })
                             aria-label={__('Issue Type')}
                             options={issueTypes.map((type) => ({
                                 value: String(type.id),
-                                label: `${type.name}${type.is_blocking ? ` ${__('⚠ Blocking')}` : ''}`,
+                                label: `${issueTypeLabel(type)}${type.is_blocking ? ` ${__('⚠ Blocking')}` : ''}`,
                             }))}
                             value={form.data.issue_type_id == null ? '' : String(form.data.issue_type_id)}
-                            onChange={(v) => form.setData('issue_type_id', v)}
+                            onChange={(v) => {
+                                form.setData('issue_type_id', v);
+                                const nextType = issueTypes.find((type) => String(type.id) === String(v));
+                                if (!titleTouched) {
+                                    if (isSuspendedCycleIssueType(nextType) && form.data.title.trim() === '') {
+                                        form.setData('title', __('Suspended machine cycle'));
+                                    } else if (!isSuspendedCycleIssueType(nextType) && form.data.title === __('Suspended machine cycle')) {
+                                        form.setData('title', '');
+                                    }
+                                }
+                            }}
                             placeholder={__('— Select type —')}
                             className="w-full"
                         />
@@ -2127,7 +2144,10 @@ function ReportIssueModal({ workOrder, issueTypes, customFields = [], onClose })
                             aria-label={__('Title')}
                             type="text"
                             value={form.data.title}
-                            onChange={(e) => form.setData('title', e.target.value)}
+                            onChange={(e) => {
+                                form.setData('title', e.target.value);
+                                setTitleTouched(true);
+                            }}
                             className={inputCls}
                             placeholder={__('Brief summary of the issue')}
                             required
@@ -2141,18 +2161,28 @@ function ReportIssueModal({ workOrder, issueTypes, customFields = [], onClose })
                     <div>
                         <div className={fieldLabelCls}>
                             {__('Description')}
+                            {suspended && <span className="text-om-blocked"> *</span>}
                         </div>
                         <textarea
                             aria-label={__('Description')}
+                            id="issue-description"
+                            aria-describedby={[suspended ? 'issue-description-hint' : null, form.errors.description ? 'issue-description-error' : null].filter(Boolean).join(' ') || undefined}
                             value={form.data.description}
                             onChange={(e) => form.setData('description', e.target.value)}
                             rows={3}
                             className={`${inputCls} resize-none`}
                             placeholder={__('Additional details…')}
+                            required={suspended}
+                            minLength={suspended ? 10 : undefined}
                             maxLength={2000}
                         />
+                        {suspended && (
+                            <p id="issue-description-hint" className="mt-1 text-xs text-om-faint">
+                                {__('Describe what is on the machine, which sheet, and since when.')}
+                            </p>
+                        )}
                         {form.errors.description && (
-                            <p className={errorCls}>{form.errors.description}</p>
+                            <p id="issue-description-error" role="alert" className={errorCls}>{form.errors.description}</p>
                         )}
                     </div>
 
@@ -2166,7 +2196,7 @@ function ReportIssueModal({ workOrder, issueTypes, customFields = [], onClose })
                     <Button
                         type="submit"
                         variant="danger"
-                        disabled={form.processing}
+                        disabled={form.processing || !form.data.issue_type_id || !form.data.title.trim() || (suspended && form.data.description.trim().length < 10)}
                         className="px-6 py-4 text-[15px] font-semibold"
                     >
                         {__('Report Issue')}
@@ -2632,7 +2662,7 @@ export default function WorkOrderDetail() {
                                         >
                                             <div className="flex items-center justify-between mb-1">
                                                 <span className="text-xs font-semibold text-om-ink">
-                                                    {issue.issue_type?.name}
+                                                    {issueTypeLabel(issue.issue_type) || '—'}
                                                 </span>
                                                 <StatusPill status={issuePillStatus(issue.status)} label={issue.status} />
                                             </div>

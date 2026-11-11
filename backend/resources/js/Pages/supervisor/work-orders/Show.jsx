@@ -7,6 +7,7 @@ import useConfirm from '../../../components/useConfirm';
 import DueCountdown from '../../../components/DueCountdown';
 import { apiCall } from '../../../lib/http';
 import { __, formatDate, formatNumber, timeAgo } from '../../../lib/i18n';
+import { issueTypeLabel } from '../../../lib/issueTypeLabel';
 import PageTrail from '../../../components/PageTrail';
 
 const TERMINAL = ['DONE', 'REJECTED', 'CANCELLED'];
@@ -519,7 +520,7 @@ export default function SupervisorWorkOrderShow() {
                                                 className={`p-2.5 rounded-om-sm text-xs ${isBlocking ? 'bg-om-blocked-bg' : 'bg-om-panel'}`}
                                             >
                                                 <div className="flex justify-between items-center gap-2">
-                                                    <span className="font-medium text-om-ink">{issue.issue_type_name}</span>
+                                                    <span className="font-medium text-om-ink">{issueTypeLabel({ code: issue.issue_type_code, name: issue.issue_type_name }) || '—'}</span>
                                                     <StatusPill
                                                         status={ISSUE_PILL_STATUS[issue.status] ?? 'pending'}
                                                         label={issue.status}

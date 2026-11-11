@@ -2,6 +2,8 @@
 
 namespace App\Http\Requests;
 
+use App\Support\SuspendedCycleIssue;
+use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
 
 class CreateIssueRequest extends FormRequest
@@ -27,6 +29,21 @@ class CreateIssueRequest extends FormRequest
             'title' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string', 'max:5000'],
         ];
+    }
+
+    /** A suspended cycle must say what is on the machine and since when. */
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator) {
+            if ($validator->errors()->has('issue_type_id') || $validator->errors()->has('description')) {
+                return;
+            }
+
+            if (SuspendedCycleIssue::typeIs($this->input('issue_type_id'))
+                && ! SuspendedCycleIssue::descriptionIsValid($this->input('description'))) {
+                $validator->errors()->add('description', SuspendedCycleIssue::errorMessage());
+            }
+        });
     }
 
     /**

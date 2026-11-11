@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use App\Http\Requests\Concerns\MergesCustomFieldRules;
 use App\Models\WorkOrder;
+use App\Support\SuspendedCycleIssue;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -94,6 +95,17 @@ class StoreManagedIssueRequest extends FormRequest
             // bare order-level entry would be counted outside that ledger.
             if ($this->input('effect') === self::EFFECT_SCRAP && $workOrder->usesStepLedger()) {
                 $validator->errors()->add('effect', __('This work order records scrap on its steps — report it there.'));
+            }
+
+            // A suspended cycle must say what is on the machine: the type alone
+            // says nothing the next shift could act on.
+            if ($validator->errors()->has('issue_type_id') || $validator->errors()->has('description')) {
+                return;
+            }
+
+            if (SuspendedCycleIssue::typeIs($this->input('issue_type_id'))
+                && ! SuspendedCycleIssue::descriptionIsValid($this->input('description'))) {
+                $validator->errors()->add('description', SuspendedCycleIssue::errorMessage());
             }
         });
     }

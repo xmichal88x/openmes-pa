@@ -18,6 +18,7 @@ import { apiCall } from '../../../lib/http';
 import { woStatusBadge } from './fields';
 import { TIER_BADGE_STYLES, tierLabel } from '../customers/fields';
 import { formatDate, formatNumber, timeAgo, elapsed, __ } from '../../../lib/i18n';
+import { issueTypeLabel } from '../../../lib/issueTypeLabel';
 
 /**
  * One work order, end to end (design ref: OpenMES Order Detail.dc.html).
@@ -777,7 +778,7 @@ function Problems({ workOrder }) {
                                 >
                                     <div className="flex items-center justify-between gap-2">
                                         <span className="truncate text-[12.5px] font-medium text-om-ink">
-                                            {issue.issue_type_name}
+                                            {issueTypeLabel({ code: issue.issue_type_code, name: issue.issue_type_name }) || '—'}
                                         </span>
                                         <StatusPill
                                             status={openIssue ? 'blocked' : 'running'}
@@ -802,21 +803,26 @@ function Activity({ entries }) {
     return (
         <Card title={__('Activity')}>
             <ul className="flex flex-col">
-                {entries.map((entry, i) => (
-                    <li
-                        key={`${entry.at}-${i}`}
-                        className="flex items-start gap-3 border-b border-om-line2 py-2 last:border-b-0"
-                    >
-                        <span className={`mt-[5px] size-2 shrink-0 rounded-[2px] ${ACTIVITY_TONE[entry.tone] ?? ACTIVITY_TONE.muted}`} />
-                        <div className="min-w-0 flex-1">
-                            <div className="truncate text-[13px] font-medium text-om-ink">{entry.title}</div>
-                            {entry.meta && (
-                                <div className="mt-px truncate font-mono text-[10px] text-om-faint">{entry.meta}</div>
-                            )}
-                        </div>
-                        <span className="shrink-0 font-mono text-[10.5px] text-om-faint">{elapsed(entry.at)}</span>
-                    </li>
-                ))}
+                {entries.map((entry, i) => {
+                    const meta = entry.issue_type_code
+                        ? [issueTypeLabel({ code: entry.issue_type_code, name: entry.issue_type_name }), entry.reported_by].filter(Boolean).join(' · ')
+                        : entry.meta;
+                    return (
+                        <li
+                            key={`${entry.at}-${i}`}
+                            className="flex items-start gap-3 border-b border-om-line2 py-2 last:border-b-0"
+                        >
+                            <span className={`mt-[5px] size-2 shrink-0 rounded-[2px] ${ACTIVITY_TONE[entry.tone] ?? ACTIVITY_TONE.muted}`} />
+                            <div className="min-w-0 flex-1">
+                                <div className="truncate text-[13px] font-medium text-om-ink">{entry.title}</div>
+                                {meta && (
+                                    <div className="mt-px truncate font-mono text-[10px] text-om-faint">{meta}</div>
+                                )}
+                            </div>
+                            <span className="shrink-0 font-mono text-[10.5px] text-om-faint">{elapsed(entry.at)}</span>
+                        </li>
+                    );
+                })}
             </ul>
         </Card>
     );

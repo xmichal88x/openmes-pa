@@ -9,6 +9,7 @@ import AppDataTable from '../../components/AppDataTable';
 import Tooltip from '../../components/Tooltip';
 import QuantityField from '../../components/QuantityField';
 import { formatDate, formatNumber, formatTime } from '../../lib/i18n';
+import { issueTypeLabel, isSuspendedCycleIssueType } from '../../lib/issueTypeLabel';
 
 // Geist White restyle: light-only v1 — former `dark:` classes removed.
 
@@ -74,25 +75,33 @@ function woStatusLabel(status) {
 
 function ReportIssueModal({ open, onClose, woId, woNo, issueTypes }) {
     const form = useForm({ work_order_id: '', issue_type_id: '', title: '', description: '' });
-    const issueTypeNames = issueTypes.map((t) => t.name);
+    const [titleTouched, setTitleTouched] = useState(false);
 
     useEffect(() => {
         if (open) {
             form.setData({ work_order_id: String(woId ?? ''), issue_type_id: '', title: '', description: '' });
+            form.clearErrors();
+            setTitleTouched(false);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open, woId]);
 
-    const handleTypeChange = (typeId, typeName) => {
+    const handleTypeChange = (type) => {
         form.setData((prev) => ({
             ...prev,
-            issue_type_id: String(typeId),
-            title: !prev.title || issueTypeNames.includes(prev.title) ? typeName : prev.title,
+            issue_type_id: String(type.id),
+            title: titleTouched
+                ? prev.title
+                : (isSuspendedCycleIssueType(type) ? __('Suspended machine cycle') : issueTypeLabel(type)),
         }));
     };
 
+    const selectedType = issueTypes.find((type) => String(type.id) === String(form.data.issue_type_id));
+    const suspended = isSuspendedCycleIssueType(selectedType);
+
     const submit = (e) => {
         e.preventDefault();
+        if (suspended && form.data.description.trim().length < 10) return;
         form.post('/operator/issue', { onSuccess: () => onClose() });
     };
 
@@ -142,11 +151,11 @@ function ReportIssueModal({ open, onClose, woId, woNo, issueTypes }) {
                                                 <input type="radio" name="issue_type_id"
                                                        value={type.id}
                                                        checked={selected}
-                                                       onChange={() => handleTypeChange(type.id, type.name)}
+                                                       onChange={() => handleTypeChange(type)}
                                                        className="sr-only"
                                                        required />
                                                 <span className="flex-1 text-sm font-medium text-om-ink leading-tight">
-                                                    {type.name}
+                                                    {issueTypeLabel(type)}
                                                     {type.is_blocking && (
                                                         <span className="block font-mono text-[10px] text-om-blocked font-normal">⚠ {__("blocking")}</span>
                                                     )}
@@ -169,7 +178,10 @@ function ReportIssueModal({ open, onClose, woId, woNo, issueTypes }) {
                                 </div>
                                 <input aria-label={__("Title")} type="text" name="title"
                                        value={form.data.title}
-                                       onChange={(e) => form.setData('title', e.target.value)}
+                                       onChange={(e) => {
+                                           form.setData('title', e.target.value);
+                                           setTitleTouched(true);
+                                       }}
                                        className={inputCls}
                                        placeholder={__("Brief summary…")}
                                        required maxLength={255} />
@@ -178,15 +190,29 @@ function ReportIssueModal({ open, onClose, woId, woNo, issueTypes }) {
                             {/* Description */}
                             <div>
                                 <div className={monoLabelCls}>
-                                    {__("Details")} <span className="text-om-faintest normal-case tracking-normal">({__("optional")})</span>
+                                    {__("Details")} {suspended
+                                        ? <span className="text-om-blocked">*</span>
+                                        : <span className="text-om-faintest normal-case tracking-normal">({__("optional")})</span>}
                                 </div>
                                 <textarea aria-label={__("Details")} name="description"
+                                          id="queue-issue-description"
+                                          aria-describedby={[suspended ? 'queue-issue-description-hint' : null, form.errors.description ? 'queue-issue-description-error' : null].filter(Boolean).join(' ') || undefined}
                                           value={form.data.description}
                                           onChange={(e) => form.setData('description', e.target.value)}
                                           rows={3}
                                           className={`${inputCls} resize-none`}
                                           placeholder={__("Additional details, photos description, measurements…")}
+                                          required={suspended}
+                                          minLength={suspended ? 10 : undefined}
                                           maxLength={2000} />
+                                {suspended && (
+                                    <p id="queue-issue-description-hint" className="mt-1 text-xs text-om-faint">
+                                        {__("Describe what is on the machine, which sheet, and since when.")}
+                                    </p>
+                                )}
+                                {form.errors.description && (
+                                    <p id="queue-issue-description-error" role="alert" className="mt-1 text-xs text-om-blocked">{form.errors.description}</p>
+                                )}
                             </div>
                         </div>
 
@@ -196,7 +222,7 @@ function ReportIssueModal({ open, onClose, woId, woNo, issueTypes }) {
                                 {__("Cancel")}
                             </Button>
                             <Button variant="danger" type="submit"
-                                    disabled={form.processing || !form.data.issue_type_id || !form.data.title}
+                                    disabled={form.processing || !form.data.issue_type_id || !form.data.title || (suspended && form.data.description.trim().length < 10)}
                                     className="flex-1 px-6 py-4 text-[15px]">
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01M5.07 19H19a2 2 0 001.75-2.97L12.75 4.97a2 2 0 00-3.5 0l-7 12A2 2 0 005.07 19z"/>

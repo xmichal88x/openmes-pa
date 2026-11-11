@@ -7,6 +7,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **Report a suspended CNC cycle.** Operators can report a suspended CNC cycle with a new
+  global issue type, *Machine Cycle Suspended*, from the existing *Report Issue* dialog — the
+  report is informational only and no reset is triggered from MES; an administrator clears the
+  cycle in CSA. A description is required (at least 10 characters) for this type in the
+  operator view, the supervisor and admin panel, and the API; issue type names and the
+  *Sheet labels* menu are localized in English and Polish, and the supervisor, admin and
+  alerts lists show the localized type name.
+
 ## [0.28.0] - 2026-11-01
 
 ### Added

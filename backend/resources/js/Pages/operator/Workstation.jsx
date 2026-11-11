@@ -12,6 +12,7 @@ import RoutingGraph from '../../components/flow/RoutingGraph';
 import DueCountdown, { SETTLED_STATUSES } from '../../components/DueCountdown';
 import { formatDate, formatNumber } from '../../lib/i18n';
 import { Hook, hasRenderableHook } from '../../lib/hooks';
+import { issueTypeLabel, isSuspendedCycleIssueType } from '../../lib/issueTypeLabel';
 import QuantityField from '../../components/QuantityField';
 
 // Geist White restyle: light-only v1 — former `dark:` variants removed.
@@ -425,29 +426,46 @@ function InfoRow({ label, children }) {
 }
 
 function ReportModal({ report, issueTypes, onClose }) {
+    const { errors = {} } = usePage().props;
     const [typeId, setTypeId] = useState('');
     const [title, setTitle] = useState('');
     const [desc, setDesc] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+    const [titleTouched, setTitleTouched] = useState(false);
+    const [submitted, setSubmitted] = useState(false);
 
     useEffect(() => {
         if (report) {
             setTypeId('');
             setTitle('');
             setDesc('');
+            setSubmitting(false);
+            setTitleTouched(false);
+            setSubmitted(false);
         }
     }, [report?.woId]);
 
     if (!report) return null;
 
+    const selectedType = issueTypes.find((t) => String(t.id) === String(typeId));
+    const suspended = isSuspendedCycleIssueType(selectedType);
+
     const handleSubmit = (e) => {
         e.preventDefault();
+        setSubmitted(true);
+        if (submitting) return;
         if (!typeId || !title) return;
-        onClose();
+        if (suspended && desc.trim().length < 10) return;
+        setSubmitting(true);
         router.post('/operator/issue', {
             work_order_id: report.woId,
             issue_type_id: typeId,
             title,
             description: desc,
+        }, {
+            onSuccess: onClose,
+            preserveScroll: true,
+            onFinish: () => setSubmitting(false),
         });
     };
 
@@ -483,12 +501,14 @@ function ReportModal({ report, issueTypes, onClose }) {
                                             checked={String(typeId) === String(t.id)}
                                             onChange={() => {
                                                 setTypeId(String(t.id));
-                                                if (!title) setTitle(t.name);
+                                                if (!titleTouched) {
+                                                    setTitle(isSuspendedCycleIssueType(t) ? __('Suspended machine cycle') : issueTypeLabel(t));
+                                                }
                                             }}
                                             className="sr-only"
                                             required
                                         />
-                                        <span className="text-sm font-medium text-om-ink">{t.name}</span>
+                                        <span className="text-sm font-medium text-om-ink">{issueTypeLabel(t)}</span>
                                     </label>
                                 ))}
                             </div>
@@ -502,7 +522,10 @@ function ReportModal({ report, issueTypes, onClose }) {
                                 aria-label="Title"
                                 type="text"
                                 value={title}
-                                onChange={(e) => setTitle(e.target.value)}
+                                onChange={(e) => {
+                                    setTitle(e.target.value);
+                                    setTitleTouched(true);
+                                }}
                                 className={inputCls}
                                 required
                                 maxLength={255}
@@ -511,16 +534,30 @@ function ReportModal({ report, issueTypes, onClose }) {
 
                         <div>
                             <div className={fieldLabelCls}>
-                                Details <span className="text-om-faint normal-case tracking-normal">(optional)</span>
+                                Details {suspended
+                                    ? <span className="text-om-blocked">*</span>
+                                    : <span className="text-om-faint normal-case tracking-normal">({__("optional")})</span>}
                             </div>
                             <textarea
                                 aria-label="Details"
+                                id="workstation-issue-description"
+                                aria-describedby={[suspended ? 'workstation-issue-description-hint' : null, submitted && errors.description ? 'workstation-issue-description-error' : null].filter(Boolean).join(' ') || undefined}
                                 value={desc}
                                 onChange={(e) => setDesc(e.target.value)}
                                 rows={3}
                                 className={`${inputCls} resize-none`}
+                                required={suspended}
+                                minLength={suspended ? 10 : undefined}
                                 maxLength={2000}
                             />
+                            {suspended && (
+                                <p id="workstation-issue-description-hint" className="mt-1 text-xs text-om-faint">
+                                    {__("Describe what is on the machine, which sheet, and since when.")}
+                                </p>
+                            )}
+                            {submitted && errors.description && (
+                                <p id="workstation-issue-description-error" role="alert" className="mt-1 text-xs text-om-blocked">{errors.description}</p>
+                            )}
                         </div>
                     </div>
 
@@ -531,7 +568,7 @@ function ReportModal({ report, issueTypes, onClose }) {
                         <Button
                             type="submit"
                             variant="danger"
-                            disabled={!typeId || !title}
+                            disabled={!typeId || !title || submitting || (suspended && desc.trim().length < 10)}
                             className="flex-1 px-6 py-4 text-[15px] font-semibold"
                         >
                             {__("Submit Report")}

@@ -9,6 +9,7 @@ import DueCountdown from '../../../components/DueCountdown';
 import CustomFields from '../../../components/CustomFields';
 import { customFieldInitial, customFieldProps, submitForm } from '../../../lib/customFieldForm';
 import { __ } from '../../../lib/i18n';
+import { issueTypeLabel, isSuspendedCycleIssueType } from '../../../lib/issueTypeLabel';
 
 const STATUS_STYLES = {
     OPEN: 'bg-om-blocked-bg text-om-blocked',
@@ -73,6 +74,8 @@ export default function IssuesIndex() {
         csrf_token: csrf,
     } = usePage().props;
 
+    const typeById = new Map(issueTypes.map((t) => [String(t.id), t]));
+
     const base =
         typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')
             ? '/admin'
@@ -92,7 +95,7 @@ export default function IssuesIndex() {
 
     const columns = [
         { key: 'title', label: __('Issue'), className: 'font-medium text-om-ink', filter: 'text' },
-        { key: 'type', label: __('Type'), className: 'text-om-muted', value: (r) => issueTypeNames[r.issue_type_id] ?? '—', render: (r) => issueTypeNames[r.issue_type_id] ?? '—' },
+        { key: 'type', label: __('Type'), className: 'text-om-muted', value: (r) => issueTypeLabel(typeById.get(String(r.issue_type_id)) ?? { name: issueTypeNames[r.issue_type_id] }) || '—', render: (r) => issueTypeLabel(typeById.get(String(r.issue_type_id)) ?? { name: issueTypeNames[r.issue_type_id] }) || '—' },
         { key: 'wo', label: __('Work Order'), className: 'text-om-muted', value: (r) => workOrderNos[r.work_order_id] ?? '—', render: (r) => workOrderNos[r.work_order_id] ?? '—' },
         { key: 'reporter', label: __('Reported by'), className: 'text-om-muted', value: (r) => reporterNames[r.reported_by_id] ?? '—', render: (r) => reporterNames[r.reported_by_id] ?? '—' },
         { key: 'reported_at', filter: 'date', label: __('Reported'), className: 'text-om-muted', render: (r) => (r.reported_at ? r.reported_at.slice(0, 16).replace('T', ' ') : '—') },
@@ -220,6 +223,7 @@ const fieldErrorCls = 'mt-1 text-[11.5px] text-om-blocked';
  */
 function ReportIssueDrawer({ open, base, lineNames, workOrders, issueTypes, scrapReasons, customFields = [], onClose, onSaved }) {
     const [lineId, setLineId] = useState('');
+    const [titleTouched, setTitleTouched] = useState(false);
     const form = useForm({
         work_order_id: '',
         issue_type_id: '',
@@ -232,6 +236,10 @@ function ReportIssueDrawer({ open, base, lineNames, workOrders, issueTypes, scra
     });
     const { data, setData, errors, processing } = form;
 
+    useEffect(() => {
+        if (open) setTitleTouched(false);
+    }, [open]);
+
     const lineOptions = Object.entries(lineNames).map(([id, name]) => ({ value: String(id), label: name }));
     const orderOptions = workOrders
         .filter((wo) => !lineId || String(wo.line_id) === lineId)
@@ -241,6 +249,12 @@ function ReportIssueDrawer({ open, base, lineNames, workOrders, issueTypes, scra
     // a step-ledger order records scrap on its steps, a paused or held order
     // can't be blocked on top of its own stop.
     const order = workOrders.find((wo) => String(wo.id) === String(data.work_order_id));
+
+    // A suspended cycle must say what is on the machine: the server enforces
+    // it, so the drawer marks the field required and blocks a too-short report.
+    const selectedType = issueTypes.find((t) => String(t.id) === String(data.issue_type_id));
+    const suspended = isSuspendedCycleIssueType(selectedType);
+
     const allowed = (effect) =>
         !order || (effect === 'scrap' ? !order.scrap_on_steps : effect === 'block' ? order.can_block : true);
     const effectOptions = EFFECT_OPTIONS.filter((o) => allowed(o.value));
@@ -250,10 +264,16 @@ function ReportIssueDrawer({ open, base, lineNames, workOrders, issueTypes, scra
     const [effectChosen, setEffectChosen] = useState(false);
     const pickType = (id) => {
         const type = issueTypes.find((t) => String(t.id) === id);
+        const auto = __('Suspended machine cycle');
         form.setData((prev) => ({
             ...prev,
             issue_type_id: id,
             effect: effectChosen ? prev.effect : (type?.is_blocking && allowed('block') ? 'block' : 'none'),
+            // A suspended cycle gets a default title so the drawer isn't a
+            // blank form when the only thing worth writing is the description.
+            title: !titleTouched && (prev.title === '' || prev.title === auto)
+                ? (isSuspendedCycleIssueType(type) ? auto : '')
+                : prev.title,
         }));
     };
 
@@ -283,7 +303,13 @@ function ReportIssueDrawer({ open, base, lineNames, workOrders, issueTypes, scra
             footer={
                 <>
                     <Button variant="secondary" onClick={onClose}>{__('Cancel')}</Button>
-                    <Button variant="danger" onClick={submit} disabled={processing}>{__('Report issue')}</Button>
+                    <Button
+                        variant="danger"
+                        onClick={submit}
+                        disabled={processing || (suspended && data.description.trim().length < 10)}
+                    >
+                        {__('Report issue')}
+                    </Button>
                 </>
             }
         >
@@ -325,7 +351,7 @@ function ReportIssueDrawer({ open, base, lineNames, workOrders, issueTypes, scra
                     <Dropdown
                         aria-label={__('Issue Type')}
                         className="w-full"
-                        options={issueTypes.map((type) => ({ value: String(type.id), label: type.name }))}
+                        options={issueTypes.map((type) => ({ value: String(type.id), label: issueTypeLabel(type) }))}
                         value={String(data.issue_type_id)}
                         onChange={pickType}
                         placeholder={__('— Select type —')}
@@ -340,7 +366,10 @@ function ReportIssueDrawer({ open, base, lineNames, workOrders, issueTypes, scra
                     <TextField
                         aria-label={__('Title')}
                         value={data.title}
-                        onChange={(v) => setData('title', v)}
+                        onChange={(v) => {
+                            setData('title', v);
+                            setTitleTouched(true);
+                        }}
                         placeholder={__('Brief summary of the issue')}
                         maxLength={255}
                         error={errors.title}
@@ -348,7 +377,9 @@ function ReportIssueDrawer({ open, base, lineNames, workOrders, issueTypes, scra
                 </div>
 
                 <div>
-                    <div className={fieldLabelCls}>{__('Description')}</div>
+                    <div className={fieldLabelCls}>
+                        {__('Description')} {suspended && <span className="text-om-blocked">*</span>}
+                    </div>
                     <TextField
                         aria-label={__('Description')}
                         multiline
@@ -356,6 +387,8 @@ function ReportIssueDrawer({ open, base, lineNames, workOrders, issueTypes, scra
                         onChange={(v) => setData('description', v)}
                         placeholder={__('Additional details…')}
                         maxLength={2000}
+                        required={suspended}
+                        hint={suspended ? __('Describe what is on the machine, which sheet, and since when.') : undefined}
                         error={errors.description}
                     />
                 </div>

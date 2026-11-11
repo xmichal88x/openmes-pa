@@ -90,6 +90,13 @@ class IssueTypesSeeder extends Seeder
                 'is_blocking' => false,
                 'is_active' => true,
             ],
+            [
+                'code' => 'MACHINE_CYCLE_SUSPENDED',
+                'name' => 'Machine Cycle Suspended',
+                'severity' => 'HIGH',
+                'is_blocking' => false,
+                'is_active' => true,
+            ],
         ];
 
         foreach ($issueTypes as $issueType) {

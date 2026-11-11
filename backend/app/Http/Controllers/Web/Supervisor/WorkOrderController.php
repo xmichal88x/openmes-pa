@@ -122,6 +122,7 @@ class WorkOrderController extends Controller
             'id' => $i->id,
             'title' => $i->title,
             'status' => $i->status,
+            'issue_type_code' => $i->issueType?->code,
             'issue_type_name' => $i->issueType?->name,
             'is_blocking' => (bool) $i->blocks_work_order,
         ])->values();

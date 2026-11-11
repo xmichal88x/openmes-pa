@@ -39,7 +39,7 @@ class IssueManagementController extends Controller
             'reporterNames' => User::pluck('name', 'id'),
             'workOrderNos' => WorkOrder::pluck('order_no', 'id'),
             // "Report issue" dialog: what can be picked.
-            'issueTypes' => IssueType::active()->orderBy('name')->get(['id', 'name', 'is_blocking']),
+            'issueTypes' => IssueType::active()->orderBy('name')->get(['id', 'code', 'name', 'is_blocking']),
             'scrapReasons' => ScrapReason::where('is_active', true)->orderBy('code')->get(['id', 'code', 'name']),
             'reportableWorkOrders' => $this->reportableWorkOrders(),
             'issueCustomFields' => $cf->clientConfig('issue'),

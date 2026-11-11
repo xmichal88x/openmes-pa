@@ -135,6 +135,7 @@ class WorkOrderManagementController extends Controller
             'id' => $i->id,
             'title' => $i->title,
             'status' => $i->status,
+            'issue_type_code' => $i->issueType?->code,
             'issue_type_name' => $i->issueType?->name,
             'is_blocking' => (bool) $i->blocks_work_order,
             'reported_at' => $i->reported_at?->toISOString(),
@@ -331,6 +332,9 @@ class WorkOrderManagementController extends Controller
             $events[] = [
                 'title' => __('Issue reported: :title', ['title' => $issue->title]),
                 'meta' => implode(' · ', array_filter([$issue->issueType?->name, $issue->reportedBy?->name])),
+                'issue_type_code' => $issue->issueType?->code,
+                'issue_type_name' => $issue->issueType?->name,
+                'reported_by' => $issue->reportedBy?->name,
                 'at' => $issue->reported_at->toISOString(),
                 'tone' => 'blocked',
             ];

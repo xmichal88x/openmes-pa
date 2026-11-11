@@ -12,6 +12,7 @@ import usePrompt from '../../../components/usePrompt';
 import { realtimeCollection } from '../../../lib/realtimeCollection';
 import { useSyncedShape } from '../../../lib/useSyncedShape';
 import { __, elapsed, formatDate, formatDateTime, timezone } from '../../../lib/i18n';
+import { issueTypeLabel } from '../../../lib/issueTypeLabel';
 import { woStatusBadge, woStatusLabel } from '../work-orders/fields';
 import { OPEN_ISSUE_STATUSES, isOverdue } from '../../../lib/alerts';
 import { usePlantToday } from '../../../lib/usePlantToday';
@@ -151,7 +152,7 @@ export default function AlertsIndex() {
     // types, most of which match nothing, is a list of dead ends.
     const typeOptions = useMemo(() => {
         const names = new Set(
-            [...blockingIssues, ...nonBlockingIssues].map((i) => i.type?.name).filter(Boolean),
+            [...blockingIssues, ...nonBlockingIssues].map((i) => issueTypeLabel(i.type)).filter(Boolean),
         );
         return [...names].sort().map((name) => ({ value: name, label: name }));
     }, [blockingIssues, nonBlockingIssues]);
@@ -372,7 +373,7 @@ function issueColumns({ acknowledge, resolve, openDetail, typeOptions }) {
             filterFn: (row, id, value) => {
                 const want = value && typeof value === 'object' && 'eq' in value ? value.eq : value;
                 if (want == null || want === '') return true;
-                return (row.original.type?.name ?? '') === String(want);
+                return issueTypeLabel(row.original.type) === String(want);
             },
             cell: ({ row }) => {
                 const issue = row.original;
@@ -397,7 +398,7 @@ function issueColumns({ acknowledge, resolve, openDetail, typeOptions }) {
                                     onClick={() => openDetail(issue)}
                                     className="min-w-0 cursor-pointer truncate text-left font-semibold text-om-ink hover:underline"
                                 >
-                                    {issue.title ?? issue.type?.name ?? __('Issue')}
+                                    {issue.title || issueTypeLabel(issue.type) || __('Issue')}
                                 </button>
                                 {/* The status enum, not the verb: `__('Open')` is
                                     the button label ("Otwórz" — *open it*), which
@@ -409,8 +410,8 @@ function issueColumns({ acknowledge, resolve, openDetail, typeOptions }) {
                                 />
                             </div>
                             <div className="truncate text-[12px] text-om-muted">
-                                {issue.type?.name && (
-                                    <span className="text-om-faint">{issue.type.name} · </span>
+                                {issue.type && (
+                                    <span className="text-om-faint">{issueTypeLabel(issue.type)} · </span>
                                 )}
                                 {issue.description}
                             </div>
@@ -570,8 +571,8 @@ function IssueDetail({ issue, onClose, onAcknowledge, onResolve }) {
         <Modal
             open
             onClose={onClose}
-            title={issue.title ?? issue.type?.name ?? __('Issue')}
-            subtitle={issue.type?.name}
+            title={issue.title || issueTypeLabel(issue.type) || __('Issue')}
+            subtitle={issueTypeLabel(issue.type)}
             closeLabel={__('Close')}
             width={560}
             footer={

@@ -8,7 +8,9 @@ use App\Models\IssueType;
 use App\Models\WorkOrder;
 use App\Services\CustomFieldService;
 use App\Services\IssueService;
+use App\Support\SuspendedCycleIssue;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class IssueController extends Controller
 {
@@ -29,6 +31,13 @@ class IssueController extends Controller
         }
 
         $issueType = IssueType::findOrFail($validated['issue_type_id']);
+
+        if (SuspendedCycleIssue::typeIs($issueType->id)
+            && ! SuspendedCycleIssue::descriptionIsValid($validated['description'] ?? null)) {
+            throw ValidationException::withMessages([
+                'description' => SuspendedCycleIssue::errorMessage(),
+            ]);
+        }
 
         $issue = Issue::create([
             'work_order_id' => $workOrder->id,

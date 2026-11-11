@@ -5,6 +5,7 @@ import { Dropdown, StatusPill } from '@openmes/ui';
 import { DataTable } from '@openmes/ui/table';
 import AppLayout from '../../layouts/AppLayout';
 import { __ } from '../../lib/i18n';
+import { issueTypeLabel } from '../../lib/issueTypeLabel';
 import PageTrail from '../../components/PageTrail';
 
 // Issue status → Geist White pill state (labels stay the translated app statuses).
@@ -19,6 +20,11 @@ export default function SupervisorDashboard() {
     const { lines = [], selectedLineId, stats = {}, throughput = {}, issueStats = {}, recentIssues = [], operatorRates = [] } = usePage().props;
 
     const changeLine = (id) => router.get('/supervisor/dashboard', id ? { line_id: id } : {}, { preserveState: false });
+
+    const issueTypeLabels = useMemo(
+        () => (issueStats.by_type?.labels ?? []).map((name, i) => issueTypeLabel({ code: issueStats.by_type?.codes?.[i], name }) || name || '—'),
+        [issueStats],
+    );
 
     const rateColumns = useMemo(() => [
         {
@@ -67,9 +73,9 @@ export default function SupervisorDashboard() {
         },
         {
             id: 'type',
-            accessorFn: (r) => r.type ?? '—',
+            accessorFn: (r) => issueTypeLabel({ code: r.type_code, name: r.type }) || '—',
             header: __('Type'),
-            cell: ({ row }) => <span className="text-om-muted">{row.original.type ?? '—'}</span>,
+            cell: ({ row }) => <span className="text-om-muted">{issueTypeLabel({ code: row.original.type_code, name: row.original.type }) || '—'}</span>,
         },
         {
             id: 'work_order',
@@ -120,7 +126,7 @@ export default function SupervisorDashboard() {
                         <BarList labels={throughput.labels} values={throughput.values} unit="" />
                     </Card>
                     <Card title={__('Issues by type (30 days)')}>
-                        <BarList labels={issueStats.by_type?.labels} values={issueStats.by_type?.values} unit="" color="bg-om-downtime" />
+                        <BarList labels={issueTypeLabels} values={issueStats.by_type?.values} unit="" color="bg-om-downtime" />
                     </Card>
                 </div>
 

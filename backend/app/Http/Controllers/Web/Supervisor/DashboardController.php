@@ -29,6 +29,7 @@ class DashboardController extends Controller
             'title' => $i->title,
             'status' => $i->status,
             'type' => $i->issueType?->name,
+            'type_code' => $i->issueType?->code,
             'work_order' => $i->workOrder?->order_no,
             'reported_by' => $i->reportedBy?->name,
             'reported_at' => $i->reported_at?->format('Y-m-d H:i'),
@@ -134,13 +135,13 @@ class DashboardController extends Controller
     {
         $startDate = Carbon::now()->subDays($days);
 
-        $issuesByType = Issue::selectRaw('issue_types.name as type_name, COUNT(*) as count')
+        $issuesByType = Issue::selectRaw('issue_types.name as type_name, issue_types.code as type_code, COUNT(*) as count')
             ->join('issue_types', 'issues.issue_type_id', '=', 'issue_types.id')
             ->when($lineId, function ($q) use ($lineId) {
                 $q->whereHas('workOrder', fn ($wo) => $wo->where('line_id', $lineId));
             })
             ->where('issues.reported_at', '>=', $startDate)
-            ->groupBy('issue_types.name')
+            ->groupBy('issue_types.name', 'issue_types.code')
             ->get();
 
         $issuesByStatus = Issue::selectRaw('status, COUNT(*) as count')
@@ -154,6 +155,7 @@ class DashboardController extends Controller
         return [
             'by_type' => [
                 'labels' => $issuesByType->pluck('type_name')->toArray(),
+                'codes' => $issuesByType->pluck('type_code')->toArray(),
                 'values' => $issuesByType->pluck('count')->toArray(),
             ],
             'by_status' => [

@@ -9,6 +9,7 @@ import { useHotShapes } from '../../components/LiveShapesProvider';
 import OeeGauge, { oeeColor } from '../../components/OeeGauge';
 import AppLayout from '../../layouts/AppLayout';
 import { __, todayInPlant } from '../../lib/i18n';
+import { issueTypeLabel } from '../../lib/issueTypeLabel';
 import OverviewHeader from '../../components/dashboard/overview/OverviewHeader';
 import OverviewGrid from '../../components/dashboard/overview/OverviewGrid';
 import useOverviewRefresh from '../../components/dashboard/overview/useOverviewRefresh';
@@ -643,7 +644,7 @@ function RecentIssues({ rows, issueTypes }) {
                                         {issue.title}
                                     </p>
                                     <p className="text-xs text-om-faint">
-                                        {type?.name ?? '—'} ·{' '}
+                                        {issueTypeLabel(type) || '—'} ·{' '}
                                         {issue.work_order_id ? __('WO #:id', { id: issue.work_order_id }) : __('no WO')}
                                     </p>
                                 </div>
