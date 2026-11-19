@@ -668,6 +668,11 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     Route::post('/work-orders/{workOrder}/reopen', [WorkOrderController::class, 'reopen']);
     Route::post('/work-orders/{workOrder}/complete', [WorkOrderController::class, 'complete']);
 
+    // P1/M-2: an explicit short-close decision — the shortage is documented by a
+    // supervisor instead of being written off silently by a low packing count.
+    Route::post('/work-orders/{workOrder}/close-short', [WorkOrderController::class, 'closeShort'])
+        ->middleware('role:Supervisor|Admin');
+
     // Change control (#182): a structured production stop, the change request that
     // comes out of it, and the review workflow that must complete before the order
     // can run on a new configuration. Resume stays on the transition route above.

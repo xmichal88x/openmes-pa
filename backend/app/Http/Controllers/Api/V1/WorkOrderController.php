@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Api\V1\CloseShortWorkOrderRequest;
 use App\Http\Requests\WorkOrder\ResumeWorkOrderRequest;
 use App\Models\Line;
 use App\Models\WorkOrder;
@@ -193,6 +194,34 @@ class WorkOrderController extends Controller
     {
         return $this->transition($workOrder, WorkOrder::STATUS_DONE, [WorkOrder::STATUS_IN_PROGRESS],
             'Only IN_PROGRESS work orders can be completed.');
+    }
+
+    /**
+     * Close an under-produced order short of its plan (P1/M-2).
+     *
+     * The supervisor's decision and everything it implies — packing closed on the
+     * real quantity, the produced rollup and DONE — happen in one service
+     * transaction, so the order never lands in the PENDING limbo a bare status
+     * update would create for `produced < planned`.
+     */
+    public function closeShort(CloseShortWorkOrderRequest $request, WorkOrder $workOrder): JsonResponse
+    {
+        $this->authorize('update', $workOrder);
+
+        try {
+            $wo = $this->workOrderService->closeShort($workOrder, $request->user(), $request->validated()['reason']);
+        } catch (\DomainException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'message' => 'Work order closed short',
+            'data' => $wo,
+            'planned_qty' => (float) $wo->planned_qty,
+            'produced_qty' => (float) $wo->produced_qty,
+            'shortage_qty' => $wo->shortageQty(),
+            'short_closed_at' => optional($wo->short_closed_at)->toIso8601String(),
+        ]);
     }
 
     private function transition(WorkOrder $workOrder, string $target, array $allowedFrom, string $errorMessage): JsonResponse

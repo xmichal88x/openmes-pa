@@ -2,9 +2,13 @@
 
 namespace App\Services\WorkOrder;
 
+use App\Models\AuditLog;
 use App\Models\Batch;
 use App\Models\BatchStep;
 use App\Models\ProcessTemplate;
+use App\Models\SerialUnit;
+use App\Models\TemplateStep;
+use App\Models\User;
 use App\Models\WorkOrder;
 use App\Support\ProductionFlow;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
@@ -837,6 +841,143 @@ class WorkOrderService
             $workOrder->status !== WorkOrder::STATUS_DONE) {
             $workOrder->update(['status' => WorkOrder::STATUS_PENDING]);
         }
+    }
+
+    /**
+     * Close a work order short of its plan as an explicit, documented decision.
+     *
+     * `updateWorkOrderStatus()` cannot finish this job: it only closes an order
+     * whose produced quantity reached the plan, and would push a short one back
+     * to PENDING (limbo). A supervisor therefore states the reason, and the same
+     * transaction records that decision, finishes every open packing step on the
+     * quantity actually packed, rolls the produced quantity up from the batches
+     * and closes the order DONE. The decision comes first because the packing gate
+     * in `BatchService::completeStep()` has to see it before the step closes.
+     *
+     * @throws \DomainException when the order cannot be closed short (blocked by
+     *                          an issue, cancelled/rejected, or not short at all)
+     */
+    public function closeShort(WorkOrder $workOrder, User $user, string $reason): WorkOrder
+    {
+        return DB::transaction(function () use ($workOrder, $user, $reason) {
+            $workOrder = WorkOrder::whereKey($workOrder->getKey())->lockForUpdate()->firstOrFail();
+
+            // Idempotent: a repeated decision returns the order untouched. The
+            // first reason is never rewritten and the audit trail keeps one entry.
+            if ($workOrder->isShortClosed()) {
+                return $workOrder->fresh(['line', 'productType', 'shortClosedBy']);
+            }
+
+            if (in_array($workOrder->status, [WorkOrder::STATUS_CANCELLED, WorkOrder::STATUS_REJECTED], true)) {
+                throw new \DomainException(__('A cancelled or rejected work order cannot be closed short (short_close_invalid_status).'));
+            }
+
+            if ($workOrder->isBlocked()) {
+                throw new \DomainException(__('The work order is blocked by an open issue - resolve it before closing the shortage (short_close_blocked_issue).'));
+            }
+
+            if ($workOrder->shortageQty() <= 0) {
+                throw new \DomainException(__('Nothing is missing on this work order, so there is no shortage to close (short_close_not_needed).'));
+            }
+
+            $beforeStatus = $workOrder->status;
+            $beforeProduced = (float) $workOrder->produced_qty;
+            $plannedQty = (float) $workOrder->planned_qty;
+            $reason = trim($reason);
+
+            // Record the decision *before* touching the steps: the packing step
+            // only closes below its target once the order is short-closed.
+            $workOrder->update([
+                'short_closed_at' => now(),
+                'short_closed_by_id' => $user->id,
+                'short_close_reason' => $reason,
+            ]);
+
+            $batches = $workOrder->batches()
+                ->where('status', '!=', Batch::STATUS_CANCELLED)
+                ->get();
+
+            foreach ($batches as $batch) {
+                $openPackingSteps = $batch->steps()
+                    ->where('kind', TemplateStep::KIND_PACKING)
+                    ->whereNotIn('status', [BatchStep::STATUS_DONE, BatchStep::STATUS_SKIPPED])
+                    ->get();
+
+                foreach ($openPackingSteps as $step) {
+                    // The gate reads the batch's work order: hand it a freshly
+                    // reloaded one so it sees the decision, not a cached copy.
+                    $step->batch->load('workOrder');
+
+                    if (in_array($step->status, [BatchStep::STATUS_PENDING, BatchStep::STATUS_READY], true)) {
+                        // Packing skips the CNC queue preflight, so a start here
+                        // is only the ladder step before the close.
+                        $step = app(BatchService::class)->startStep($step->fresh(), $user);
+                    }
+
+                    app(BatchService::class)->completeStep($step->fresh(), $user, [
+                        'produced_qty' => $this->packedUnitsQty($workOrder, $batch),
+                    ]);
+                }
+            }
+
+            // Same formula as `BatchService::completeBatch()`: the order produced
+            // what its finished batches produced.
+            $workOrder->update([
+                'produced_qty' => (float) $workOrder->batches()
+                    ->where('status', Batch::STATUS_DONE)
+                    ->sum('produced_qty'),
+            ]);
+
+            // Closed by decision, so DONE is stated explicitly - the status rollup
+            // would otherwise leave a below-plan order open.
+            $workOrder->update([
+                'status' => WorkOrder::STATUS_DONE,
+                'completed_at' => $workOrder->completed_at ?? now(),
+            ]);
+
+            AuditLog::create([
+                'user_id' => $user->id,
+                'entity_type' => WorkOrder::class,
+                'entity_id' => $workOrder->id,
+                'action' => 'short_closed',
+                'before_state' => [
+                    'status' => $beforeStatus,
+                    'produced_qty' => $beforeProduced,
+                    'planned_qty' => $plannedQty,
+                ],
+                'after_state' => [
+                    'shortage_qty' => $workOrder->shortageQty(),
+                    'reason' => $reason,
+                ],
+            ]);
+
+            return $workOrder->fresh(['line', 'productType', 'shortClosedBy']);
+        });
+    }
+
+    /**
+     * The quantity a batch's packing closes on: the units that actually left the
+     * line. Units carrying no batch are counted only when the order has exactly
+     * one batch - otherwise they could belong to any of them.
+     */
+    private function packedUnitsQty(WorkOrder $workOrder, Batch $batch): float
+    {
+        $statuses = [SerialUnit::STATUS_COMPLETED, SerialUnit::STATUS_SHIPPED];
+
+        $produced = (float) SerialUnit::query()
+            ->where('batch_id', $batch->id)
+            ->whereIn('status', $statuses)
+            ->count();
+
+        if ($workOrder->batches()->count() === 1) {
+            $produced += (float) SerialUnit::query()
+                ->where('work_order_id', $workOrder->id)
+                ->whereNull('batch_id')
+                ->whereIn('status', $statuses)
+                ->count();
+        }
+
+        return $produced;
     }
 
     /**
