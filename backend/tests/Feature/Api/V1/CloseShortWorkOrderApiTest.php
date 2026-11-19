@@ -157,8 +157,11 @@ class CloseShortWorkOrderApiTest extends TestCase
     {
         $this->workOrder->update(['produced_qty' => 2]);
 
-        $response = $this->asSupervisor()->assertStatus(422);
+        $response = $this->asSupervisor()->assertStatus(422)
+            ->assertJsonCount(1, 'errors')
+            ->assertJsonCount(1, 'errors.work_order');
         $this->assertStringContainsString('short_close_not_needed', $response->json('message'));
+        $this->assertStringContainsString('short_close_not_needed', $response->json('errors.work_order.0'));
         $this->assertNull($this->workOrder->fresh()->short_closed_at);
     }
 
@@ -194,8 +197,11 @@ class CloseShortWorkOrderApiTest extends TestCase
             'blocks_work_order' => true,
         ]);
 
-        $response = $this->asSupervisor()->assertStatus(422);
+        $response = $this->asSupervisor()->assertStatus(422)
+            ->assertJsonCount(1, 'errors')
+            ->assertJsonCount(1, 'errors.work_order');
         $this->assertStringContainsString('short_close_blocked_issue', $response->json('message'));
+        $this->assertStringContainsString('short_close_blocked_issue', $response->json('errors.work_order.0'));
 
         $order = $this->workOrder->fresh();
         $this->assertNull($order->short_closed_at);
@@ -207,8 +213,11 @@ class CloseShortWorkOrderApiTest extends TestCase
     {
         $this->workOrder->update(['status' => WorkOrder::STATUS_CANCELLED]);
 
-        $response = $this->asSupervisor()->assertStatus(422);
+        $response = $this->asSupervisor()->assertStatus(422)
+            ->assertJsonCount(1, 'errors')
+            ->assertJsonCount(1, 'errors.work_order');
         $this->assertStringContainsString('short_close_invalid_status', $response->json('message'));
+        $this->assertStringContainsString('short_close_invalid_status', $response->json('errors.work_order.0'));
         $this->assertNull($this->workOrder->fresh()->short_closed_at);
     }
 
@@ -222,8 +231,11 @@ class CloseShortWorkOrderApiTest extends TestCase
     {
         $this->packingStep()->update(['requires_confirmation' => true]);
 
-        $response = $this->asSupervisor()->assertStatus(422);
+        $response = $this->asSupervisor()->assertStatus(422)
+            ->assertJsonCount(1, 'errors')
+            ->assertJsonCount(1, 'errors.work_order');
         $this->assertStringContainsString('confirm', $response->json('message'));
+        $this->assertStringContainsString('confirm', $response->json('errors.work_order.0'));
 
         $order = $this->workOrder->fresh();
         $this->assertNull($order->short_closed_at);

@@ -9,6 +9,7 @@ use App\Models\Line;
 use App\Models\WorkOrder;
 use App\Services\WorkOrder\WorkOrderService;
 use App\Services\WorkOrder\WorkOrderStopService;
+use App\Support\ApiValidationError;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -211,12 +212,12 @@ class WorkOrderController extends Controller
         try {
             $wo = $this->workOrderService->closeShort($workOrder, $request->user(), $request->validated()['reason']);
         } catch (\DomainException $e) {
-            return response()->json(['message' => $e->getMessage()], 422);
+            return ApiValidationError::response('work_order', $e->getMessage());
         } catch (\Exception $e) {
             // The packing gate raises plain exceptions for business blocks (mandatory
             // document, checklist, read confirmation). The service transaction is
             // already rolled back, so this is a validation answer, not a server fault.
-            return response()->json(['message' => $e->getMessage()], 422);
+            return ApiValidationError::response('work_order', $e->getMessage());
         }
 
         return response()->json([

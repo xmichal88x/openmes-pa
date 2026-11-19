@@ -180,8 +180,11 @@ class CorrectPackingQtyApiTest extends TestCase
         $step = $this->packingStep();
         $step->update(['status' => BatchStep::STATUS_IN_PROGRESS, 'passed_qty' => 0]);
 
-        $response = $this->asSupervisor($step)->assertStatus(422);
+        $response = $this->asSupervisor($step)->assertStatus(422)
+            ->assertJsonCount(1, 'errors')
+            ->assertJsonCount(1, 'errors.step');
         $this->assertStringContainsString('packing_correction_step_open', $response->json('message'));
+        $this->assertStringContainsString('packing_correction_step_open', $response->json('errors.step.0'));
 
         $this->assertSame(0.0, (float) $step->fresh()->passed_qty);
         $this->assertSame(2.0, (float) $this->batch->fresh()->produced_qty);
@@ -192,8 +195,11 @@ class CorrectPackingQtyApiTest extends TestCase
 
     public function test_a_non_packing_step_is_refused(): void
     {
-        $response = $this->asSupervisor($this->productionStep())->assertStatus(422);
+        $response = $this->asSupervisor($this->productionStep())->assertStatus(422)
+            ->assertJsonCount(1, 'errors')
+            ->assertJsonCount(1, 'errors.step');
         $this->assertStringContainsString('packing_correction_not_packing', $response->json('message'));
+        $this->assertStringContainsString('packing_correction_not_packing', $response->json('errors.step.0'));
 
         $this->assertSame(2.0, (float) $this->productionStep()->passed_qty);
         $this->assertSame(2.0, (float) $this->packingStep()->passed_qty);
@@ -221,8 +227,11 @@ class CorrectPackingQtyApiTest extends TestCase
             }
         });
 
-        $response = $this->asSupervisor($step)->assertStatus(422);
+        $response = $this->asSupervisor($step)->assertStatus(422)
+            ->assertJsonCount(1, 'errors')
+            ->assertJsonCount(1, 'errors.step');
         $this->assertStringContainsString('closed accounting period', $response->json('message'));
+        $this->assertStringContainsString('closed accounting period', $response->json('errors.step.0'));
 
         $this->assertSame(2.0, (float) $step->fresh()->passed_qty);
         $this->assertSame(2.0, (float) $this->batch->fresh()->produced_qty);

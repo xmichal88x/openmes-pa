@@ -13,6 +13,7 @@ use App\Http\Requests\Api\V1\StartBatchStepRequest;
 use App\Models\BatchStep;
 use App\Services\IssueService;
 use App\Services\WorkOrder\BatchService;
+use App\Support\ApiValidationError;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -171,11 +172,11 @@ class BatchStepController extends Controller
                 (string) $request->validated('reason'),
             );
         } catch (\DomainException $e) {
-            return response()->json(['message' => $e->getMessage()], 422);
+            return ApiValidationError::response('step', $e->getMessage());
         } catch (\Exception $e) {
             // A business rule raised as a plain exception is a refusal the operator
             // can act on, not a server fault: the transaction has rolled back.
-            return response()->json(['message' => $e->getMessage()], 422);
+            return ApiValidationError::response('step', $e->getMessage());
         }
 
         return response()->json([
