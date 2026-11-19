@@ -10,6 +10,7 @@ use App\Models\Line;
 use App\Models\ProductType;
 use App\Models\TemplateStep;
 use App\Models\Tenant;
+use App\Models\User;
 use App\Models\WorkOrder;
 use App\Support\TenantContext;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -226,5 +227,120 @@ class ProductionExportPackingTest extends TestCase
         $this->assertSame($last->id, $row['packing_step_id']);
         $this->assertSame(0, $row['packing_steps_open']);
         $this->assertSame($last->fresh()->completed_at->toIso8601String(), $row['packing_completed_at']);
+    }
+
+    public function test_mo_ref_is_exported_from_extra_data(): void
+    {
+        $this->workOrder([
+            'order_no' => 'WO-MO-REF',
+            'status' => WorkOrder::STATUS_DONE,
+            'completed_at' => now(),
+            'extra_data' => ['mo_ref' => 'MO-WC-EDE-990001-1'],
+        ]);
+
+        $row = $this->completionsRow('WO-MO-REF');
+
+        $this->assertSame('MO-WC-EDE-990001-1', $row['mo_ref']);
+    }
+
+    public function test_mo_ref_is_null_when_the_key_is_absent_or_extra_data_is_null(): void
+    {
+        $withoutKey = $this->workOrder([
+            'order_no' => 'WO-MO-MISSING',
+            'status' => WorkOrder::STATUS_DONE,
+            'completed_at' => now(),
+            'extra_data' => ['wc_order_number' => '847'],
+        ]);
+        $nullExtraData = $this->workOrder([
+            'order_no' => 'WO-MO-NULL',
+            'status' => WorkOrder::STATUS_DONE,
+            'completed_at' => now(),
+            'extra_data' => null,
+        ]);
+        $emptyRef = $this->workOrder([
+            'order_no' => 'WO-MO-EMPTY',
+            'status' => WorkOrder::STATUS_DONE,
+            'completed_at' => now(),
+            'extra_data' => ['mo_ref' => ''],
+        ]);
+
+        $this->assertNull($this->completionsRow('WO-MO-MISSING')['mo_ref']);
+        $this->assertNull($this->showRow($withoutKey)['mo_ref']);
+        $this->assertNull($this->showRow($nullExtraData)['mo_ref']);
+        $this->assertNull($this->showRow($emptyRef)['mo_ref']);
+    }
+
+    public function test_a_short_closed_order_exports_its_short_close_facts(): void
+    {
+        $supervisor = User::factory()->create();
+        $closedAt = now()->subMinutes(10);
+
+        $workOrder = $this->workOrder([
+            'order_no' => 'WO-SHORT-CLOSED',
+            'status' => WorkOrder::STATUS_DONE,
+            'completed_at' => now(),
+            'planned_qty' => 2,
+            'produced_qty' => 1,
+            'short_closed_at' => $closedAt,
+            'short_closed_by_id' => $supervisor->id,
+            'short_close_reason' => 'brak materiału',
+        ]);
+
+        $row = $this->showRow($workOrder);
+
+        $this->assertSame(
+            $workOrder->fresh()->short_closed_at->toIso8601String(),
+            $row['short_closed_at']
+        );
+        $this->assertMatchesRegularExpression(
+            '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/',
+            $row['short_closed_at']
+        );
+        $this->assertSame($supervisor->id, $row['short_closed_by']);
+        $this->assertSame('brak materiału', $row['short_close_reason']);
+        $this->assertSame(1.0, (float) $row['shortage_qty']);
+    }
+
+    public function test_an_order_without_a_short_close_exports_nulls_and_no_shortage(): void
+    {
+        $workOrder = $this->workOrder([
+            'order_no' => 'WO-FULL-QTY',
+            'status' => WorkOrder::STATUS_DONE,
+            'completed_at' => now(),
+            'planned_qty' => 2,
+            'produced_qty' => 2,
+        ]);
+
+        $row = $this->showRow($workOrder);
+
+        $this->assertNull($row['short_closed_at']);
+        $this->assertNull($row['short_closed_by']);
+        $this->assertNull($row['short_close_reason']);
+        $this->assertSame(0.0, (float) $row['shortage_qty']);
+    }
+
+    public function test_short_close_facts_are_identical_in_completions_and_show(): void
+    {
+        $supervisor = User::factory()->create();
+
+        $workOrder = $this->workOrder([
+            'order_no' => 'WO-SHORT-PARITY',
+            'status' => WorkOrder::STATUS_DONE,
+            'completed_at' => now(),
+            'planned_qty' => 3,
+            'produced_qty' => 2,
+            'short_closed_at' => now(),
+            'short_closed_by_id' => $supervisor->id,
+            'short_close_reason' => 'uszkodzony arkusz',
+            'extra_data' => ['mo_ref' => 'MO-WC-EDE-990002-1'],
+        ]);
+
+        $completions = $this->completionsRow('WO-SHORT-PARITY');
+        $show = $this->showRow($workOrder);
+
+        foreach (['mo_ref', 'shortage_qty', 'short_closed_at', 'short_closed_by', 'short_close_reason'] as $key) {
+            $this->assertArrayHasKey($key, $completions);
+            $this->assertSame($completions[$key], $show[$key], "Field {$key} differs between completions and show.");
+        }
     }
 }

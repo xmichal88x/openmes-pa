@@ -101,10 +101,17 @@ class ProductionExportController extends Controller
 
         $wcOrderNumber = $wo->extra_data['wc_order_number'] ?? null;
 
+        // Manufacturing order reference carried through from the ERP import —
+        // lets the bridge book produced quantities per MO instead of per WO.
+        $moRef = isset($wo->extra_data['mo_ref']) && $wo->extra_data['mo_ref'] !== ''
+            ? (string) $wo->extra_data['mo_ref']
+            : null;
+
         return [
             'order_no' => $wo->order_no,
             'customer_order_no' => $wo->customer_order_no,
             'wc_order_number' => $wcOrderNumber !== null ? (string) $wcOrderNumber : null,
+            'mo_ref' => $moRef,
             'status' => $wo->status,
             'planned_qty' => (float) $wo->planned_qty,
             'produced_qty' => (float) $wo->produced_qty,
@@ -117,6 +124,12 @@ class ProductionExportController extends Controller
             'packing_completed_at' => $packingCompletedAt?->toIso8601String(),
             'packing_steps_open' => $openPackingSteps->count(),
             'completed_at' => $wo->completed_at?->toIso8601String(),
+            // Explicit short close (P1/M-1) surfaced so the ERP can post the
+            // real quantity and flag the missing amount instead of guessing.
+            'shortage_qty' => $wo->shortageQty(),
+            'short_closed_at' => optional($wo->short_closed_at)->toIso8601String(),
+            'short_closed_by' => $wo->short_closed_by_id !== null ? (int) $wo->short_closed_by_id : null,
+            'short_close_reason' => $wo->short_close_reason !== null ? (string) $wo->short_close_reason : null,
             'updated_at' => $wo->updated_at?->toIso8601String(),
         ];
     }
