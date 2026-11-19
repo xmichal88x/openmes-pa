@@ -101,6 +101,20 @@ services:
       REVERB_HOST: ${REVERB_HOST:-reverb}
       REVERB_PORT: ${REVERB_PORT:-8080}
       REVERB_SCHEME: ${REVERB_SCHEME:-http}
+      # Machine commands (P1a). Every process that runs `artisan config:cache`
+      # has to see the same values: the compiled config lands in the shared
+      # bootstrap/cache volume, so a sidecar started without them re-caches the
+      # defaults below (false) and the feature dies silently — the host .env says
+      # enabled while config('machine_commands.enabled') says false (R31/R35).
+      MACHINE_COMMANDS_ENABLED: ${MACHINE_COMMANDS_ENABLED:-false}
+      MACHINE_COMMANDS_LOAD_NC: ${MACHINE_COMMANDS_LOAD_NC:-false}
+      MACHINE_COMMANDS_MANUAL_M30: ${MACHINE_COMMANDS_MANUAL_M30:-false}
+      MACHINE_COMMANDS_GENERATE_LABELS: ${MACHINE_COMMANDS_GENERATE_LABELS:-false}
+      MACHINE_COMMANDS_LINE_CODES: ${MACHINE_COMMANDS_LINE_CODES:-CNC}
+      MACHINE_COMMANDS_STEP_MATCH: ${MACHINE_COMMANDS_STEP_MATCH:-cnc,ciecie,cięcie,nest,frez}
+      MACHINE_COMMANDS_WORKSTATION_TYPES: ${MACHINE_COMMANDS_WORKSTATION_TYPES:-}
+      MACHINE_COMMANDS_LEASE_SECONDS: ${MACHINE_COMMANDS_LEASE_SECONDS:-300}
+      MACHINE_COMMANDS_MAX_ATTEMPTS: ${MACHINE_COMMANDS_MAX_ATTEMPTS:-5}
     expose:
       - "8000"
     depends_on:
@@ -152,6 +166,18 @@ services:
       REVERB_APP_SECRET: ${REVERB_APP_SECRET:-openmessecret}
       REVERB_SERVER_HOST: 0.0.0.0
       REVERB_SERVER_PORT: 8080
+      # Machine commands (P1a) — same values as backend: this process runs
+      # `artisan config:cache` too, and a cache built without them flips the
+      # flags back to the defaults below (false) even when the .env says true.
+      MACHINE_COMMANDS_ENABLED: ${MACHINE_COMMANDS_ENABLED:-false}
+      MACHINE_COMMANDS_LOAD_NC: ${MACHINE_COMMANDS_LOAD_NC:-false}
+      MACHINE_COMMANDS_MANUAL_M30: ${MACHINE_COMMANDS_MANUAL_M30:-false}
+      MACHINE_COMMANDS_GENERATE_LABELS: ${MACHINE_COMMANDS_GENERATE_LABELS:-false}
+      MACHINE_COMMANDS_LINE_CODES: ${MACHINE_COMMANDS_LINE_CODES:-CNC}
+      MACHINE_COMMANDS_STEP_MATCH: ${MACHINE_COMMANDS_STEP_MATCH:-cnc,ciecie,cięcie,nest,frez}
+      MACHINE_COMMANDS_WORKSTATION_TYPES: ${MACHINE_COMMANDS_WORKSTATION_TYPES:-}
+      MACHINE_COMMANDS_LEASE_SECONDS: ${MACHINE_COMMANDS_LEASE_SECONDS:-300}
+      MACHINE_COMMANDS_MAX_ATTEMPTS: ${MACHINE_COMMANDS_MAX_ATTEMPTS:-5}
     expose:
       - "8080"
     depends_on:
@@ -205,6 +231,18 @@ services:
       REVERB_HOST: ${REVERB_HOST:-reverb}
       REVERB_PORT: ${REVERB_PORT:-8080}
       REVERB_SCHEME: ${REVERB_SCHEME:-http}
+      # Machine commands (P1a) — must match backend: this sidecar re-caches the
+      # shared bootstrap/cache, so without them the enabled flag goes back to
+      # false for the whole stack (R31/R35).
+      MACHINE_COMMANDS_ENABLED: ${MACHINE_COMMANDS_ENABLED:-false}
+      MACHINE_COMMANDS_LOAD_NC: ${MACHINE_COMMANDS_LOAD_NC:-false}
+      MACHINE_COMMANDS_MANUAL_M30: ${MACHINE_COMMANDS_MANUAL_M30:-false}
+      MACHINE_COMMANDS_GENERATE_LABELS: ${MACHINE_COMMANDS_GENERATE_LABELS:-false}
+      MACHINE_COMMANDS_LINE_CODES: ${MACHINE_COMMANDS_LINE_CODES:-CNC}
+      MACHINE_COMMANDS_STEP_MATCH: ${MACHINE_COMMANDS_STEP_MATCH:-cnc,ciecie,cięcie,nest,frez}
+      MACHINE_COMMANDS_WORKSTATION_TYPES: ${MACHINE_COMMANDS_WORKSTATION_TYPES:-}
+      MACHINE_COMMANDS_LEASE_SECONDS: ${MACHINE_COMMANDS_LEASE_SECONDS:-300}
+      MACHINE_COMMANDS_MAX_ATTEMPTS: ${MACHINE_COMMANDS_MAX_ATTEMPTS:-5}
     depends_on:
       postgres:
         condition: service_healthy
@@ -261,6 +299,18 @@ services:
       REVERB_HOST: ${REVERB_HOST:-reverb}
       REVERB_PORT: ${REVERB_PORT:-8080}
       REVERB_SCHEME: ${REVERB_SCHEME:-http}
+      # Machine commands (P1a) — must match backend: this sidecar re-caches the
+      # shared bootstrap/cache, so without them the enabled flag goes back to
+      # false for the whole stack (R31/R35).
+      MACHINE_COMMANDS_ENABLED: ${MACHINE_COMMANDS_ENABLED:-false}
+      MACHINE_COMMANDS_LOAD_NC: ${MACHINE_COMMANDS_LOAD_NC:-false}
+      MACHINE_COMMANDS_MANUAL_M30: ${MACHINE_COMMANDS_MANUAL_M30:-false}
+      MACHINE_COMMANDS_GENERATE_LABELS: ${MACHINE_COMMANDS_GENERATE_LABELS:-false}
+      MACHINE_COMMANDS_LINE_CODES: ${MACHINE_COMMANDS_LINE_CODES:-CNC}
+      MACHINE_COMMANDS_STEP_MATCH: ${MACHINE_COMMANDS_STEP_MATCH:-cnc,ciecie,cięcie,nest,frez}
+      MACHINE_COMMANDS_WORKSTATION_TYPES: ${MACHINE_COMMANDS_WORKSTATION_TYPES:-}
+      MACHINE_COMMANDS_LEASE_SECONDS: ${MACHINE_COMMANDS_LEASE_SECONDS:-300}
+      MACHINE_COMMANDS_MAX_ATTEMPTS: ${MACHINE_COMMANDS_MAX_ATTEMPTS:-5}
     depends_on:
       postgres:
         condition: service_healthy
@@ -288,6 +338,18 @@ services:
       OPENMES_API_TOKEN: ${OPENMES_API_TOKEN}
       OPCUA_CONNECTION_ID: ${OPCUA_CONNECTION_ID:-1}
       OPCUA_PASSWORD: ${OPCUA_PASSWORD:-}
+      # Machine commands (P1a): this is a Node.js sidecar with no Laravel and no
+      # `config:cache`, so it reads none of these. Kept identical to the Laravel
+      # services so the block cannot drift service by service.
+      MACHINE_COMMANDS_ENABLED: ${MACHINE_COMMANDS_ENABLED:-false}
+      MACHINE_COMMANDS_LOAD_NC: ${MACHINE_COMMANDS_LOAD_NC:-false}
+      MACHINE_COMMANDS_MANUAL_M30: ${MACHINE_COMMANDS_MANUAL_M30:-false}
+      MACHINE_COMMANDS_GENERATE_LABELS: ${MACHINE_COMMANDS_GENERATE_LABELS:-false}
+      MACHINE_COMMANDS_LINE_CODES: ${MACHINE_COMMANDS_LINE_CODES:-CNC}
+      MACHINE_COMMANDS_STEP_MATCH: ${MACHINE_COMMANDS_STEP_MATCH:-cnc,ciecie,cięcie,nest,frez}
+      MACHINE_COMMANDS_WORKSTATION_TYPES: ${MACHINE_COMMANDS_WORKSTATION_TYPES:-}
+      MACHINE_COMMANDS_LEASE_SECONDS: ${MACHINE_COMMANDS_LEASE_SECONDS:-300}
+      MACHINE_COMMANDS_MAX_ATTEMPTS: ${MACHINE_COMMANDS_MAX_ATTEMPTS:-5}
     depends_on:
       - backend
     restart: unless-stopped
@@ -339,6 +401,18 @@ services:
       REVERB_HOST: ${REVERB_HOST:-reverb}
       REVERB_PORT: ${REVERB_PORT:-8080}
       REVERB_SCHEME: ${REVERB_SCHEME:-http}
+      # Machine commands (P1a) — must match backend: this sidecar re-caches the
+      # shared bootstrap/cache, so without them the enabled flag goes back to
+      # false for the whole stack (R31/R35).
+      MACHINE_COMMANDS_ENABLED: ${MACHINE_COMMANDS_ENABLED:-false}
+      MACHINE_COMMANDS_LOAD_NC: ${MACHINE_COMMANDS_LOAD_NC:-false}
+      MACHINE_COMMANDS_MANUAL_M30: ${MACHINE_COMMANDS_MANUAL_M30:-false}
+      MACHINE_COMMANDS_GENERATE_LABELS: ${MACHINE_COMMANDS_GENERATE_LABELS:-false}
+      MACHINE_COMMANDS_LINE_CODES: ${MACHINE_COMMANDS_LINE_CODES:-CNC}
+      MACHINE_COMMANDS_STEP_MATCH: ${MACHINE_COMMANDS_STEP_MATCH:-cnc,ciecie,cięcie,nest,frez}
+      MACHINE_COMMANDS_WORKSTATION_TYPES: ${MACHINE_COMMANDS_WORKSTATION_TYPES:-}
+      MACHINE_COMMANDS_LEASE_SECONDS: ${MACHINE_COMMANDS_LEASE_SECONDS:-300}
+      MACHINE_COMMANDS_MAX_ATTEMPTS: ${MACHINE_COMMANDS_MAX_ATTEMPTS:-5}
     depends_on:
       postgres:
         condition: service_healthy
