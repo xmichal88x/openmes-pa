@@ -714,6 +714,10 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     Route::post('/batch-step-documents/{batchStepDocument}/validate', [BatchStepDocumentController::class, 'validateDocument']);
     Route::middleware('role:Supervisor|Admin')
         ->post('/batch-steps/{batchStep}/documents', [BatchStepDocumentController::class, 'store']);
+    // Data repair (P1/M-6): a supervisor corrects the quantity of a closed packing
+    // step when PA and the MES disagree, and the order's status is re-derived.
+    Route::middleware('role:Supervisor|Admin')
+        ->post('/batch-steps/{batchStep}/correct-packing-qty', [BatchStepController::class, 'correctPackingQty']);
     // Pool dispatch (#52): supervisor assigns a specific workstation to a pending step.
     Route::middleware('role:Supervisor|Admin')
         ->post('/batch-steps/{batchStep}/assign', [\App\Http\Controllers\Api\V1\BatchStepController::class, 'assign']);

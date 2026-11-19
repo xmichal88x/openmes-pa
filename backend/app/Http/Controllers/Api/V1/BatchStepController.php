@@ -8,6 +8,7 @@ use App\Exceptions\SystemFanoutForbiddenException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\AssignBatchStepWorkstationRequest;
 use App\Http\Requests\Api\V1\CompleteBatchStepRequest;
+use App\Http\Requests\Api\V1\CorrectPackingQtyRequest;
 use App\Http\Requests\Api\V1\StartBatchStepRequest;
 use App\Models\BatchStep;
 use App\Services\IssueService;
@@ -151,6 +152,34 @@ class BatchStepController extends Controller
         return response()->json([
             'message' => 'Instructions acknowledged',
             'data' => $batchStep->load(['confirmedBy', 'batch.workOrder']),
+        ]);
+    }
+
+    /**
+     * Correct the quantity of a closed packing step (P1/M-6) so the MES stops
+     * claiming what PA never packed. Supervisor-only, documented by a reason.
+     */
+    public function correctPackingQty(CorrectPackingQtyRequest $request, BatchStep $batchStep): JsonResponse
+    {
+        $this->authorize('view', $batchStep->batch->workOrder);
+
+        try {
+            $step = $this->batchService->correctPackingQuantity(
+                $batchStep,
+                $request->user(),
+                (float) $request->validated('produced_qty'),
+                (string) $request->validated('reason'),
+            );
+        } catch (\DomainException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'message' => 'Packing quantity corrected',
+            'data' => $step,
+            'batch_produced_qty' => (float) $step->batch->produced_qty,
+            'wo_produced_qty' => (float) $step->batch->workOrder->produced_qty,
+            'wo_status' => $step->batch->workOrder->status,
         ]);
     }
 

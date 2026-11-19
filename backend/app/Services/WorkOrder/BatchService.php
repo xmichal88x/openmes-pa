@@ -659,6 +659,90 @@ class BatchService
     }
 
     /**
+     * Correct the quantity of an already closed packing step (P1/M-6).
+     *
+     * The packed quantity is the only figure the order closes on, so when PA and
+     * the MES disagree a supervisor states the right number and why. Step, batch
+     * and order are re-derived from that number in one transaction: an order that
+     * no longer covers its plan goes back into production instead of keeping a
+     * DONE it did not earn, while a documented short close stays DONE.
+     */
+    public function correctPackingQuantity(BatchStep $step, User $user, float $produced, string $reason): BatchStep
+    {
+        return DB::transaction(function () use ($step, $user, $produced, $reason) {
+            $step = BatchStep::whereKey($step->getKey())->lockForUpdate()->firstOrFail();
+
+            if (! $step->isPacking()) {
+                throw new \DomainException(__('Only a packing step carries the packed quantity (packing_correction_not_packing).'));
+            }
+            if ($step->status !== BatchStep::STATUS_DONE) {
+                throw new \DomainException(__('Only a finished packing step can be corrected; log the quantity while it runs (packing_correction_step_open).'));
+            }
+            $downstreamRecorded = $step->batch->steps()
+                ->where('step_number', '>', $step->step_number)
+                ->where(fn ($query) => $query->where('passed_qty', '>', 0)->orWhere('scrap_qty', '>', 0))
+                ->exists();
+            if ($downstreamRecorded) {
+                throw new \DomainException(__('Pieces are already recorded beyond packing - correct those steps first (packing_correction_downstream_recorded).'));
+            }
+            if (! is_finite($produced) || $produced < 0) {
+                throw new \DomainException(__('Enter a valid packed quantity (packing_correction_invalid_qty).'));
+            }
+
+            $batch = $step->batch;
+            $workOrder = $batch->workOrder;
+            $beforeStep = (float) $step->passed_qty;
+            $beforeBatch = (float) $batch->produced_qty;
+            $beforeWo = (float) $workOrder->produced_qty;
+            $beforeStatus = $workOrder->status;
+
+            $step->update(['passed_qty' => $produced]);
+            $batch->update(['produced_qty' => $produced]);
+
+            $producedTotal = (float) $batch->workOrder->batches()
+                ->where('status', Batch::STATUS_DONE)
+                ->sum('produced_qty');
+            $workOrder->update(['produced_qty' => $producedTotal]);
+
+            if ($workOrder->isShortClosed()) {
+                $workOrder->update(['status' => WorkOrder::STATUS_DONE]);
+            } elseif ($workOrder->isComplete()) {
+                $workOrder->update([
+                    'status' => WorkOrder::STATUS_DONE,
+                    'completed_at' => $workOrder->completed_at ?? now(),
+                ]);
+            } else {
+                $workOrder->update([
+                    'status' => WorkOrder::STATUS_IN_PROGRESS,
+                    'completed_at' => null,
+                ]);
+            }
+
+            AuditLog::create([
+                'user_id' => $user->id,
+                'entity_type' => BatchStep::class,
+                'entity_id' => $step->id,
+                'action' => 'packing_qty_corrected',
+                'before_state' => [
+                    'passed_qty' => $beforeStep,
+                    'batch_produced_qty' => $beforeBatch,
+                    'wo_produced_qty' => $beforeWo,
+                    'wo_status' => $beforeStatus,
+                ],
+                'after_state' => [
+                    'passed_qty' => $produced,
+                    'batch_produced_qty' => $produced,
+                    'wo_produced_qty' => $producedTotal,
+                    'wo_status' => $workOrder->fresh()->status,
+                    'reason' => trim($reason),
+                ],
+            ]);
+
+            return $step->fresh(['batch.workOrder']);
+        });
+    }
+
+    /**
      * Log pieces leaving a step: `$good` passed to the next station, `$scrap`
      * lost here (recorded as a scrap entry without a reason — the reason can be
      * added later from the scrap report). In transfer flow this is what opens
