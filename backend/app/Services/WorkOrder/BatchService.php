@@ -10,6 +10,7 @@ use App\Models\Batch;
 use App\Models\BatchStep;
 use App\Models\QualityControlTask;
 use App\Models\ScrapEntry;
+use App\Models\SerialUnit;
 use App\Models\Shift;
 use App\Models\User;
 use App\Models\WorkOrder;
@@ -470,6 +471,82 @@ class BatchService
                 throw new \Exception(__('Actual setup + run time cannot exceed the actual elapsed time.'));
             }
 
+            // Packing closes on the units it packed, not on the plan: the units are
+            // the only evidence of what actually left the line. A quantity below the
+            // plan is a supervisor's short-close decision, never a silent write-off.
+            $packedQty = null;
+            if ($step->isPacking()) {
+                $packingOrder = $step->batch->workOrder;
+                $given = array_key_exists('produced_qty', $data) && $data['produced_qty'] !== null
+                    ? (float) $data['produced_qty']
+                    : null;
+                $unitStatuses = [SerialUnit::STATUS_COMPLETED, SerialUnit::STATUS_SHIPPED];
+
+                $derived = (float) SerialUnit::query()
+                    ->where('batch_id', $step->batch_id)
+                    ->whereIn('status', $unitStatuses)
+                    ->count();
+                $anyUnits = SerialUnit::query()->where('batch_id', $step->batch_id)->exists();
+
+                // Units packed before they were attributed to a batch are added
+                // only when the order cannot confuse them with another batch (I15).
+                $loose = SerialUnit::query()
+                    ->where('work_order_id', $packingOrder->id)
+                    ->whereNull('batch_id')
+                    ->whereIn('status', $unitStatuses)
+                    ->count();
+                if ($loose > 0) {
+                    $batchCount = $packingOrder->batches()->count();
+                    if ($batchCount > 1 && $given === null) {
+                        throw new \DomainException(__(
+                            'Unit attribution is ambiguous (unit_attribution_ambiguous): :qty packed unit(s) carry no batch and order :order has :n batches - attribute them or state the produced quantity.',
+                            ['qty' => $loose, 'order' => $packingOrder->order_no, 'n' => $batchCount],
+                        ));
+                    }
+                    if ($batchCount === 1) {
+                        $derived += $loose;
+                        $anyUnits = $anyUnits || SerialUnit::query()->where('work_order_id', $packingOrder->id)->exists();
+                    }
+                }
+
+                if ($anyUnits) {
+                    // The packed units are the figure; a stated quantity may only agree with them.
+                    $produced = $given ?? $derived;
+                    if ($given !== null && abs($given - $derived) > 0.001) {
+                        throw new \DomainException(__(
+                            'The stated quantity does not match the packed units (packing_qty_mismatch_units): :given stated, :derived packed.',
+                            ['given' => $given, 'derived' => $derived],
+                        ));
+                    }
+                } else {
+                    // No per-unit record at all: the operator must count, and the count is audited.
+                    if ($given === null) {
+                        throw new \DomainException(__(
+                            'Packing needs the produced quantity (packing_qty_required): no unit is recorded for this batch, so the quantity must be entered.'
+                        ));
+                    }
+                    $produced = $given;
+                    AuditLog::create([
+                        'user_id' => $user->id,
+                        'entity_type' => BatchStep::class,
+                        'entity_id' => $step->id,
+                        'action' => 'packing_qty_manual_no_units',
+                        'before_state' => ['produced_qty' => null],
+                        'after_state' => ['produced_qty' => $produced, 'reason' => 'no_units'],
+                    ]);
+                }
+
+                if ($produced + 0.001 < (float) $step->batch->target_qty && ! $packingOrder->isShortClosed()) {
+                    throw new \DomainException(__(
+                        'Packing finished short of the plan (packing_shortage_requires_decision): :qty packed of :target - a supervisor must close the shortage first.',
+                        ['qty' => $produced, 'target' => (float) $step->batch->target_qty],
+                    ));
+                }
+
+                // The batch records what was packed, never the plan.
+                $data['produced_qty'] = $packedQty = $produced;
+            }
+
             // Whole-batch flow: finishing a step passes along whatever was not
             // scrapped, so the ledger stays consistent without any quantity
             // logging. (Transfer flow arrives here with nothing left waiting.)
@@ -478,7 +555,7 @@ class BatchService
             // Complete the step
             $step->update([
                 'status' => BatchStep::STATUS_DONE,
-                'passed_qty' => (float) $step->passed_qty + $remainder,
+                'passed_qty' => $packedQty ?? (float) $step->passed_qty + $remainder,
                 'completed_at' => now(),
                 'completed_by_id' => $user->id,
                 'duration_minutes' => $durationMinutes,
