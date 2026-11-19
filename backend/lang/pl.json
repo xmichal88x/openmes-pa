@@ -7473,5 +7473,22 @@
     "Order :no": "Zlecenie :no",
     "Suspended machine cycle": "Zawieszony cykl maszyny",
     "Describe what is on the machine, which sheet, and since when.": "Opisz, co jest na maszynie, który arkusz i od kiedy.",
-    "Describe what is on the machine, which sheet, and since when (at least 10 characters).": "Opisz, co jest na maszynie, który arkusz i od kiedy (co najmniej 10 znaków)."
+    "Describe what is on the machine, which sheet, and since when (at least 10 characters).": "Opisz, co jest na maszynie, który arkusz i od kiedy (co najmniej 10 znaków).",
+    "Short close (shortage)": "Zamknięcie krótkie (brak)",
+    "Closed short": "Zamknięte krótko",
+    "Decision needed": "Wymaga decyzji",
+    "Closed short at :date": "Zamknięte krótko: :date",
+    "Reason:": "Powód:",
+    "By :name": "Przez: :name",
+    "Missing:": "Brak:",
+    "Missing: :qty pcs of :planned planned": "Brak: :qty szt. z :planned planowanych",
+    "Close short": "Zamknij krótko",
+    "Packing cannot close below plan until a supervisor records the decision.": "Pakowanie nie może zamknąć poniżej planu, dopóki przełożony nie zapisze decyzji.",
+    "This records the shortage and closes the order below plan; packing steps still open close on the quantity actually packed.": "To zapisuje brak i zamyka zlecenie poniżej planu; otwarte kroki pakowania zamkną się na ilości faktycznie zapakowanej.",
+    "Why is the order short — damaged units, material, scrap?": "Dlaczego brakuje sztuk — uszkodzenia, materiał, odpad?",
+    ":count / :min characters": ":count / :min znaków",
+    "I record this as a quality decision — missing quantity: :qty pcs": "Zapisuję decyzję jakościową — brakująca ilość: :qty szt.",
+    "Closing…": "Zamykanie…",
+    "Work order closed short.": "Zlecenie zamknięte krótko.",
+    "Short close failed": "Zamknięcie krótkie nie powiodło się"
 }

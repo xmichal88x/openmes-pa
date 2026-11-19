@@ -1,10 +1,19 @@
 // Geist White restyle: light-only v1 — om-* tokens + @openmes/ui (status transitions, modal post and batch logic untouched).
 import { useEffect, useState } from 'react';
 import { Head, Link, router, usePage } from '@inertiajs/react';
-import { Button, StatusPill, Stepper } from '@openmes/ui';
+import { Button, Checkbox, Modal, StatusPill, Stepper } from '@openmes/ui';
 import AppLayout from '../../../layouts/AppLayout';
 import useConfirm from '../../../components/useConfirm';
 import DueCountdown from '../../../components/DueCountdown';
+import {
+    SHORT_CLOSE_MIN_REASON,
+    canCloseShort,
+    hasSupervisorRole,
+    isShortClosed,
+    shortCloseErrorMessage,
+    shortClosePayload,
+    shortageQty,
+} from '../../../components/shortCloseLogic';
 import { apiCall } from '../../../lib/http';
 import { __, formatDate, formatNumber, timeAgo } from '../../../lib/i18n';
 import { issueTypeLabel } from '../../../lib/issueTypeLabel';
@@ -270,6 +279,17 @@ export default function SupervisorWorkOrderShow() {
     const [showDoneModal, setShowDoneModal] = useState(false);
     const { confirm, dialog } = useConfirm();
 
+    // P1/M-5: the packing gate (M-3) refuses to close a step below plan until a
+    // supervisor records the shortage — this card is that way out, and it is
+    // gated on the same roles as the API route.
+    const roles = auth?.user?.roles ?? [];
+    const shortage = shortageQty(workOrder);
+    const shortClosed = isShortClosed(workOrder);
+    const showShortClose = hasSupervisorRole(roles) && (shortage > 0 || shortClosed);
+    const shortClosable = canCloseShort(workOrder, roles);
+    const [showShortCloseModal, setShowShortCloseModal] = useState(false);
+    const [shortCloseNotice, setShortCloseNotice] = useState(null);
+
     const post = (verb) => router.post(`/supervisor/work-orders/${workOrder.id}/${verb}`, {}, { preserveScroll: true });
 
     useEffect(() => {
@@ -495,6 +515,57 @@ export default function SupervisorWorkOrderShow() {
                             </div>
                         </div>
 
+                        {/* P1/M-5: below plan, a supervisor documents the shortage here
+                            instead of writing it off with a low packing count. */}
+                        {showShortClose && (
+                            <div className="bg-om-card border border-om-line rounded-om p-5">
+                                <div className="flex items-center justify-between mb-3">
+                                    <h3 className="text-[14px] font-semibold text-om-ink">{__('Short close (shortage)')}</h3>
+                                    <span className={`font-mono text-[9.5px] uppercase tracking-[0.08em] ${shortClosed ? 'text-om-faint' : 'text-om-blocked'}`}>
+                                        {shortClosed ? __('Closed short') : __('Decision needed')}
+                                    </span>
+                                </div>
+
+                                {shortCloseNotice && (
+                                    <p role="status" className="text-xs text-om-running mb-2">{shortCloseNotice}</p>
+                                )}
+
+                                {shortClosed ? (
+                                    <div className="space-y-1.5 text-sm">
+                                        <p className="text-om-muted">
+                                            {__('Closed short at :date', { date: fmtDateTime(workOrder.short_closed_at) ?? '—' })}
+                                        </p>
+                                        <p className="text-om-muted">
+                                            {__('Reason:')} <span className="text-om-ink">{workOrder.short_close_reason ?? '—'}</span>
+                                        </p>
+                                        {workOrder.short_closed_by && (
+                                            <p className="text-xs text-om-faint">{__('By :name', { name: workOrder.short_closed_by })}</p>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="flex justify-between items-baseline text-sm mb-2">
+                                            <span className="text-om-muted">{__('Missing:')}</span>
+                                            <span className="font-mono font-medium text-om-blocked">{fmtQty(shortage)} {__('pcs')}</span>
+                                        </div>
+                                        <p className="text-xs text-om-muted mb-3">
+                                            {__('Packing cannot close below plan until a supervisor records the decision.')}
+                                        </p>
+                                        <Button
+                                            variant="secondary"
+                                            disabled={!shortClosable}
+                                            onClick={() => {
+                                                setShortCloseNotice(null);
+                                                setShowShortCloseModal(true);
+                                            }}
+                                        >
+                                            {__('Close short')}
+                                        </Button>
+                                    </>
+                                )}
+                            </div>
+                        )}
+
                         <OrderMachinesPanel machines={workOrder.machines ?? []} />
 
                         {/* Issues */}
@@ -539,6 +610,19 @@ export default function SupervisorWorkOrderShow() {
 
             {showDoneModal && (
                 <DoneModal workOrder={workOrder} onClose={() => setShowDoneModal(false)} />
+            )}
+
+            {showShortCloseModal && (
+                <ShortCloseModal
+                    workOrder={workOrder}
+                    shortage={shortage}
+                    onClose={() => setShowShortCloseModal(false)}
+                    onClosed={() => {
+                        setShowShortCloseModal(false);
+                        setShortCloseNotice(__('Work order closed short.'));
+                        router.reload({ only: ['workOrder'], preserveScroll: true, preserveState: true });
+                    }}
+                />
             )}
             {dialog}
 
@@ -619,6 +703,92 @@ function AssignWorkstationModal({ step, workstations, typeNames, onClose }) {
                 </div>
             </div>
         </div>
+    );
+}
+
+/**
+ * P1/M-5: the supervisor's short-close decision. Mirrors the API contract
+ * (`reason` min. 3 characters, Supervisor|Admin) and stays open on a 422, so a
+ * reason the server refuses can be fixed without retyping the whole note.
+ */
+function ShortCloseModal({ workOrder, shortage, onClose, onClosed }) {
+    const [reason, setReason] = useState('');
+    const [confirmed, setConfirmed] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState(null);
+
+    const canSubmit = shortClosePayload(reason) !== null && confirmed && !saving;
+
+    async function submit() {
+        const body = shortClosePayload(reason);
+        if (!body || !confirmed || saving) return;
+
+        setSaving(true);
+        setError(null);
+        try {
+            const res = await apiCall(`/api/v1/work-orders/${workOrder.id}/close-short`, 'POST', body);
+            if (!res.ok) {
+                const json = await res.json().catch(() => ({}));
+                setError(__(shortCloseErrorMessage(res.status, json)));
+                return;
+            }
+            onClosed();
+        } catch {
+            setError(__(shortCloseErrorMessage(null, null)));
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    return (
+        <Modal
+            open
+            onClose={() => { if (!saving) onClose(); }}
+            title={__('Close short')}
+            subtitle={workOrder.order_no}
+            closeLabel={__('Close')}
+            footer={
+                <>
+                    <Button variant="secondary" onClick={onClose} disabled={saving}>
+                        {__('Cancel')}
+                    </Button>
+                    <Button variant="primary" onClick={submit} loading={saving} disabled={!canSubmit}>
+                        {saving ? __('Closing…') : __('Close short')}
+                    </Button>
+                </>
+            }
+        >
+            <div className="flex flex-col gap-3">
+                <p className="m-0 text-[13px] text-om-ink">
+                    {__('This records the shortage and closes the order below plan; packing steps still open close on the quantity actually packed.')}
+                </p>
+                <p className="m-0 text-[12px] font-medium text-om-blocked">
+                    {__('Missing: :qty pcs of :planned planned', { qty: fmtQty(shortage), planned: fmtQty(workOrder.planned_qty) })}
+                </p>
+                {error && <p role="alert" className="m-0 text-[12px] text-om-blocked">{error}</p>}
+                <label className="flex flex-col gap-1">
+                    <span className="text-[12px] font-medium text-om-ink">{__('Reason (required)')}</span>
+                    <textarea
+                        value={reason}
+                        onChange={(event) => setReason(event.target.value)}
+                        rows={3}
+                        minLength={SHORT_CLOSE_MIN_REASON}
+                        maxLength={500}
+                        required
+                        placeholder={__('Why is the order short — damaged units, material, scrap?')}
+                        className="w-full rounded-om-sm border border-om-line bg-om-bg px-3 py-2 text-[13px] text-om-ink outline-none focus:border-om-accent"
+                    />
+                    <span className="text-[11px] text-om-faint">
+                        {__(':count / :min characters', { count: reason.trim().length, min: SHORT_CLOSE_MIN_REASON })}
+                    </span>
+                </label>
+                <Checkbox
+                    checked={confirmed}
+                    onChange={setConfirmed}
+                    label={__('I record this as a quality decision — missing quantity: :qty pcs', { qty: fmtQty(shortage) })}
+                />
+            </div>
+        </Modal>
     );
 }
 

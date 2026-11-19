@@ -94,7 +94,7 @@ class WorkOrderController extends Controller
 
     public function show(WorkOrder $workOrder)
     {
-        $workOrder->load(['line', 'productType', 'batches.workstation.line', 'batches.steps.workstation.line', 'issues.issueType', 'issues.reportedBy']);
+        $workOrder->load(['line', 'productType', 'batches.workstation.line', 'batches.steps.workstation.line', 'issues.issueType', 'issues.reportedBy', 'shortClosedBy']);
 
         $batches = $workOrder->batches->map(function ($batch) {
             return [
@@ -135,6 +135,13 @@ class WorkOrderController extends Controller
                 'status' => $workOrder->status,
                 'planned_qty' => $workOrder->planned_qty,
                 'produced_qty' => $workOrder->produced_qty,
+                // P1/M-5: the short-close decision the page renders (and the
+                // shortage it is about); read-only, the decision itself is the
+                // API's POST /work-orders/{id}/close-short.
+                'shortage_qty' => $workOrder->shortageQty(),
+                'short_closed_at' => $workOrder->short_closed_at?->toIso8601String(),
+                'short_close_reason' => $workOrder->short_close_reason,
+                'short_closed_by' => $workOrder->shortClosedBy?->name,
                 'priority' => $workOrder->priority,
                 'due_date' => $workOrder->due_date?->toDateString(),
                 'description' => $workOrder->description,

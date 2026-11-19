@@ -7381,5 +7381,22 @@
     "Order :no": "Order :no",
     "Suspended machine cycle": "Suspended machine cycle",
     "Describe what is on the machine, which sheet, and since when.": "Describe what is on the machine, which sheet, and since when.",
-    "Describe what is on the machine, which sheet, and since when (at least 10 characters).": "Describe what is on the machine, which sheet, and since when (at least 10 characters)."
+    "Describe what is on the machine, which sheet, and since when (at least 10 characters).": "Describe what is on the machine, which sheet, and since when (at least 10 characters).",
+    "Short close (shortage)": "Short close (shortage)",
+    "Closed short": "Closed short",
+    "Decision needed": "Decision needed",
+    "Closed short at :date": "Closed short at :date",
+    "Reason:": "Reason:",
+    "By :name": "By :name",
+    "Missing:": "Missing:",
+    "Missing: :qty pcs of :planned planned": "Missing: :qty pcs of :planned planned",
+    "Close short": "Close short",
+    "Packing cannot close below plan until a supervisor records the decision.": "Packing cannot close below plan until a supervisor records the decision.",
+    "This records the shortage and closes the order below plan; packing steps still open close on the quantity actually packed.": "This records the shortage and closes the order below plan; packing steps still open close on the quantity actually packed.",
+    "Why is the order short — damaged units, material, scrap?": "Why is the order short — damaged units, material, scrap?",
+    ":count / :min characters": ":count / :min characters",
+    "I record this as a quality decision — missing quantity: :qty pcs": "I record this as a quality decision — missing quantity: :qty pcs",
+    "Closing…": "Closing…",
+    "Work order closed short.": "Work order closed short.",
+    "Short close failed": "Short close failed"
 }
