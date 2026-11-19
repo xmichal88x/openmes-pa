@@ -495,6 +495,7 @@ class BatchService
                     ->whereNull('batch_id')
                     ->whereIn('status', $unitStatuses)
                     ->count();
+                $batchCount = null;
                 if ($loose > 0) {
                     $batchCount = $packingOrder->batches()->count();
                     if ($batchCount > 1 && $given === null) {
@@ -526,17 +527,30 @@ class BatchService
                         ));
                     }
                     $produced = $given;
+                    // Unattributed units exist but belong to no single batch: the
+                    // operator's count is still trusted, yet this is not a "no units"
+                    // case and must not be audited as one.
+                    $ambiguousLoose = $loose > 0 && $batchCount !== null && $batchCount > 1;
                     AuditLog::create([
                         'user_id' => $user->id,
                         'entity_type' => BatchStep::class,
                         'entity_id' => $step->id,
-                        'action' => 'packing_qty_manual_no_units',
+                        'action' => $ambiguousLoose ? 'packing_qty_manual_ambiguous_units' : 'packing_qty_manual_no_units',
                         'before_state' => ['produced_qty' => null],
-                        'after_state' => ['produced_qty' => $produced, 'reason' => 'no_units'],
+                        'after_state' => $ambiguousLoose
+                            ? ['produced_qty' => $produced, 'reason' => 'ambiguous_units', 'loose_units' => $loose]
+                            : ['produced_qty' => $produced, 'reason' => 'no_units'],
                     ]);
                 }
 
-                if ($produced + 0.001 < (float) $step->batch->target_qty && ! $packingOrder->isShortClosed()) {
+                // A fully replaced batch legitimately packs nothing: the demand was re-cut.
+                $coveredByReplacement = $step->batch->replacements()
+                    ->where('status', '!=', Batch::STATUS_CANCELLED)
+                    ->exists();
+
+                if ($produced + 0.001 < (float) $step->batch->target_qty
+                    && ! $packingOrder->isShortClosed()
+                    && ! $coveredByReplacement) {
                     throw new \DomainException(__(
                         'Packing finished short of the plan (packing_shortage_requires_decision): :qty packed of :target - a supervisor must close the shortage first.',
                         ['qty' => $produced, 'target' => (float) $step->batch->target_qty],

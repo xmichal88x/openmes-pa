@@ -199,4 +199,61 @@ class PackingQtyDerivedTest extends TestCase
         $this->assertSame(3.0, (float) $done->passed_qty);
         $this->assertSame(3.0, (float) $batch->fresh()->produced_qty);
     }
+
+    /** A replacement batch cut against the given one, as BatchController::recut builds it. */
+    private function replacementBatch(WorkOrder $wo, Batch $origin, float $targetQty, string $status = Batch::STATUS_PENDING): Batch
+    {
+        $replacement = app(WorkOrderService::class)->createBatch($wo, $targetQty);
+        $replacement->forceFill([
+            'is_replacement' => true,
+            'replaces_batch_id' => $origin->id,
+            'status' => $status,
+        ])->save();
+
+        return $replacement->fresh();
+    }
+
+    public function test_replaced_batch_closes_with_zero_produced(): void
+    {
+        [$wo, $batch, $step] = $this->packingStep(1);
+        $this->replacementBatch($wo, $batch, 1);
+
+        $done = app(BatchService::class)->completeStep($step, $this->operator, ['produced_qty' => 0]);
+
+        $this->assertSame(BatchStep::STATUS_DONE, $done->status);
+        $this->assertSame(0.0, (float) $done->passed_qty);
+        $this->assertSame(0.0, (float) $batch->fresh()->produced_qty);
+    }
+
+    public function test_cancelled_replacement_does_not_exempt_shortage(): void
+    {
+        [$wo, $batch, $step] = $this->packingStep(1);
+        $this->replacementBatch($wo, $batch, 1, Batch::STATUS_CANCELLED);
+
+        $this->expectException(\DomainException::class);
+        $this->expectExceptionMessage('packing_shortage_requires_decision');
+        app(BatchService::class)->completeStep($step, $this->operator, ['produced_qty' => 0]);
+    }
+
+    public function test_ambiguous_manual_quantity_is_audited(): void
+    {
+        [$wo, $batch, $step] = $this->packingStep(2);
+        app(WorkOrderService::class)->createBatch($wo, 2);
+        $this->unit($wo, null, 'SN-1');
+        $this->assertSame(2, $wo->batches()->count());
+
+        $done = app(BatchService::class)->completeStep($step, $this->operator, ['produced_qty' => 2]);
+
+        $this->assertSame(BatchStep::STATUS_DONE, $done->status);
+        $audit = AuditLog::where('action', 'packing_qty_manual_ambiguous_units')
+            ->where('entity_id', $step->id)
+            ->first();
+        $this->assertNotNull($audit);
+        $this->assertSame(2.0, (float) $audit->after_state['produced_qty']);
+        $this->assertSame('ambiguous_units', $audit->after_state['reason']);
+        $this->assertSame(1, (int) $audit->after_state['loose_units']);
+        $this->assertFalse(AuditLog::where('action', 'packing_qty_manual_no_units')
+            ->where('entity_id', $step->id)
+            ->exists());
+    }
 }
