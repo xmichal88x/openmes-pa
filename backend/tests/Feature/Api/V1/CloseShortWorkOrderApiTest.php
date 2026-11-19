@@ -213,6 +213,29 @@ class CloseShortWorkOrderApiTest extends TestCase
     }
 
     /**
+     * X-5: the packing gate in `BatchService::completeStep()` raises plain
+     * exceptions for business blocks (mandatory document, checklist, read
+     * confirmation). The supervisor must see that reason as 422, not as an empty
+     * 500 — and the decision written before the gate has to roll back with it.
+     */
+    public function test_an_unconfirmed_critical_instruction_is_a_422_and_the_decision_rolls_back(): void
+    {
+        $this->packingStep()->update(['requires_confirmation' => true]);
+
+        $response = $this->asSupervisor()->assertStatus(422);
+        $this->assertStringContainsString('confirm', $response->json('message'));
+
+        $order = $this->workOrder->fresh();
+        $this->assertNull($order->short_closed_at);
+        $this->assertNull($order->short_closed_by_id);
+        $this->assertNull($order->short_close_reason);
+        $this->assertNotSame(WorkOrder::STATUS_DONE, $order->status);
+        // The packing step start that preceded the gate is rolled back too.
+        $this->assertSame(BatchStep::STATUS_READY, $this->packingStep()->status);
+        $this->assertFalse(AuditLog::where('action', 'short_closed')->exists());
+    }
+
+    /**
      * P1/M-3 integration: a bare status update would put a below-plan order back
      * to PENDING. The decision closes the packing step and the order together, so
      * no limbo state is ever created.

@@ -212,6 +212,11 @@ class WorkOrderController extends Controller
             $wo = $this->workOrderService->closeShort($workOrder, $request->user(), $request->validated()['reason']);
         } catch (\DomainException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
+        } catch (\Exception $e) {
+            // The packing gate raises plain exceptions for business blocks (mandatory
+            // document, checklist, read confirmation). The service transaction is
+            // already rolled back, so this is a validation answer, not a server fault.
+            return response()->json(['message' => $e->getMessage()], 422);
         }
 
         return response()->json([

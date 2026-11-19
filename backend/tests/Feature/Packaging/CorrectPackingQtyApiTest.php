@@ -200,6 +200,38 @@ class CorrectPackingQtyApiTest extends TestCase
         $this->assertSame(WorkOrder::STATUS_DONE, $this->workOrder->fresh()->status);
     }
 
+    /**
+     * X-5: a business rule that surfaces as a plain exception must reach the
+     * supervisor as 422 with a reason, never as an empty 500. The correction
+     * writes the step first and only then records the audit entry, so a refusal
+     * raised at that point proves the whole correction rolls back.
+     *
+     * `correctPackingQuantity()` does not complete a step, so the read
+     * confirmation / document / checklist gates cannot be used here: every
+     * business check in the service is a `\DomainException`. The plain exception
+     * is therefore injected at the last write of the same transaction.
+     */
+    public function test_a_business_failure_mid_correction_answers_422_and_rolls_every_write_back(): void
+    {
+        $step = $this->packingStep();
+
+        AuditLog::creating(function (AuditLog $log): void {
+            if ($log->action === 'packing_qty_corrected') {
+                throw new \Exception('The packing correction cannot be recorded in a closed accounting period.');
+            }
+        });
+
+        $response = $this->asSupervisor($step)->assertStatus(422);
+        $this->assertStringContainsString('closed accounting period', $response->json('message'));
+
+        $this->assertSame(2.0, (float) $step->fresh()->passed_qty);
+        $this->assertSame(2.0, (float) $this->batch->fresh()->produced_qty);
+        $this->assertSame(2.0, (float) $this->workOrder->fresh()->produced_qty);
+        $this->assertSame(WorkOrder::STATUS_DONE, $this->workOrder->fresh()->status);
+        $this->assertNotNull($this->workOrder->fresh()->completed_at);
+        $this->assertFalse(AuditLog::where('action', 'packing_qty_corrected')->exists());
+    }
+
     public function test_an_operator_cannot_correct_the_packing_quantity(): void
     {
         $this->withHeader('Authorization', "Bearer {$this->operatorToken}")
