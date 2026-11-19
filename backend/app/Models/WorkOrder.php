@@ -208,6 +208,11 @@ class WorkOrder extends Model
         'description',
         'extra_data',
         'completed_at',
+        // Explicit short close (P1/M-1): when and by whom the order was closed
+        // with a documented shortage, and why.
+        'short_closed_at',
+        'short_closed_by_id',
+        'short_close_reason',
         'tenant_id',
     ];
 
@@ -230,6 +235,7 @@ class WorkOrder extends Model
             'planned_start_at' => 'datetime',
             'planned_end_at' => 'datetime',
             'completed_at' => 'datetime',
+            'short_closed_at' => 'datetime',
         ];
     }
 
@@ -522,6 +528,12 @@ class WorkOrder extends Model
         return $this->belongsTo(ProductRevision::class);
     }
 
+    /** The Supervisor who closed this order with a shortage (null until short-closed). */
+    public function shortClosedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'short_closed_by_id');
+    }
+
     /**
      * BOMs (process templates) linked to this work order. An order may reference
      * more than one BOM (variant / alternative bills of materials); all linked
@@ -730,6 +742,32 @@ class WorkOrder extends Model
         $good = max(0.0, $produced - $this->totalScrapQty());
 
         return round(($good / $produced) * 100, 2);
+    }
+
+    /**
+     * Units still missing to meet the plan; zero when production met or
+     * exceeded it.
+     */
+    public function shortageQty(): float
+    {
+        return max(0.0, (float) $this->planned_qty - (float) $this->produced_qty);
+    }
+
+    /** Whether a Supervisor already closed this order with a documented shortage. */
+    public function isShortClosed(): bool
+    {
+        return $this->short_closed_at !== null;
+    }
+
+    /**
+     * Whether a short close is still available: something is missing, the order
+     * is not closed that way yet and it was not cancelled or rejected.
+     */
+    public function canCloseShort(): bool
+    {
+        return ! $this->isShortClosed()
+            && $this->shortageQty() > 0
+            && ! in_array($this->status, [self::STATUS_CANCELLED, self::STATUS_REJECTED], true);
     }
 
     /**
