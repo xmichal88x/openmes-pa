@@ -41,6 +41,9 @@
 #   OPENMES_ENABLE_MQTT=0|1                          (default: 0)
 #   OPENMES_ENABLE_MODBUS=0|1                        (default: 0)
 #   OPENMES_SOURCE_URL_OVERRIDE=...                  (optional AGPL link override)
+#   OPENMES_RETENTION_SCRIPT=...                     (image retention hook, step 9;
+#                                                     default: openmes_image_retention.sh
+#                                                     next to this script)
 #
 # AGPL §13 provenance: after the image is available locally the script reads
 # org.opencontainers.image.revision and always exports APP_SOURCE_URL to
@@ -70,6 +73,7 @@ usage() {
         '  OPENMES_ENABLE_MQTT   0|1 (default: 0, or keep an existing container)' \
         '  OPENMES_ENABLE_MODBUS 0|1 (default: 0, opt-in only)' \
         '  OPENMES_SOURCE_URL_OVERRIDE  AGPL source link override (optional)' \
+        '  OPENMES_RETENTION_SCRIPT     image retention hook (optional)' \
         '' \
         'Always deployed: backend reverb. See the header for details.'
 }
@@ -340,5 +344,18 @@ printf 'image:    %s\n' "$OPENMES_IMAGE"
 printf 'image ID: %s\n' "$RUNNING_ID"
 docker image inspect -f 'digest:   {{join .RepoDigests ", "}}' "$OPENMES_IMAGE" 2>/dev/null \
     | sed 's/^digest:   $/digest:   (local image, no repo digest)/' >&2 || true
+
+# 9. Image retention (owner rule): keep the running production image plus ONE
+#    rollback copy and delete the rest of the OpenMES repo images. The script
+#    lives in production-automation/config/openmes_image_retention.sh and is
+#    installed next to this file. Best-effort by design: a retention failure
+#    must never fail a deploy that already passed health checks.
+RETENTION_SCRIPT="${OPENMES_RETENTION_SCRIPT:-$(dirname "${BASH_SOURCE[0]}")/openmes_image_retention.sh}"
+if [[ -x "$RETENTION_SCRIPT" ]]; then
+    log "image retention: $RETENTION_SCRIPT --apply"
+    "$RETENTION_SCRIPT" --apply >&2 || log "image retention failed (ignored — deploy is OK)"
+else
+    log "image retention script not found ($RETENTION_SCRIPT) — skipping"
+fi
 
 exit 0
