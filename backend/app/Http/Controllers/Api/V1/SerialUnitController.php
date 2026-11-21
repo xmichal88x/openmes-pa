@@ -16,6 +16,7 @@ use App\Models\SerialUnit;
 use App\Services\Traceability\BindingException;
 use App\Services\Traceability\SerialTraceService;
 use App\Support\UnitSerialisation;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -27,23 +28,75 @@ class SerialUnitController extends Controller
 {
     public function __construct(private readonly SerialTraceService $serials) {}
 
+    /**
+     * Paged unit listing, keyed by id rather than by an offset.
+     *
+     * A client collecting every unit of a work order reads the list while
+     * operators keep registering units, so an offset (page N) would shift under
+     * it: rows would repeat or disappear between requests. The cursor is the id
+     * of the last row already received - the next portion asks for
+     * `before_id=<that id>` and stops when `has_more` is false.
+     *
+     * `total` counts the rows matching the filters regardless of the cursor, so
+     * it answers "how many units does this work order have now", not "how many
+     * are left after the cursor".
+     */
     public function index(Request $request): JsonResponse
     {
-        $limit = min(max((int) $request->query('per_page', 100), 1), 1000);
+        $perPage = min(max((int) $request->query('per_page', 100), 1), 1000);
 
-        $units = SerialUnit::query()
+        $rawBeforeId = $request->query('before_id');
+        $beforeId = null;
+
+        if ($rawBeforeId !== null && $rawBeforeId !== '') {
+            if (! is_scalar($rawBeforeId) || ! preg_match('/^[0-9]+$/', (string) $rawBeforeId)) {
+                // A malformed cursor must not be mistaken for "no more units".
+                $message = 'before_id must be a positive integer id';
+
+                return response()->json([
+                    'message' => $message,
+                    'errors' => ['before_id' => [$message]],
+                ], 422);
+            }
+
+            $beforeId = (int) $rawBeforeId;
+        }
+
+        $total = $this->filteredUnits($request)->count();
+
+        // One row past the portion tells us whether another exists, so the
+        // answer does not need a second query.
+        $rows = $this->filteredUnits($request)
+            ->when($beforeId !== null, fn ($q) => $q->where('id', '<', $beforeId))
+            ->orderByDesc('id')
+            ->limit($perPage + 1)
+            ->get();
+
+        $hasMore = $rows->count() > $perPage;
+        $units = $rows->take($perPage)->values();
+
+        return response()->json([
+            'data' => $units,
+            'meta' => [
+                'per_page' => $perPage,
+                'total' => $total,
+                'has_more' => $hasMore,
+                'next_before_id' => $hasMore ? $units->last()->id : null,
+            ],
+        ]);
+    }
+
+    /** The unit list narrowed by the query filters, before any cursor. */
+    private function filteredUnits(Request $request): Builder
+    {
+        return SerialUnit::query()
             ->when($request->query('work_order_id'), fn ($q, $id) => $q->where('work_order_id', $id))
             ->when($request->query('status'), fn ($q, $s) => $q->where('status', $s))
             ->when($request->query('serial_no'), fn ($q, $s) => $q->where('serial_no', app(UnitSerialisation::class)->normalize($s)))
             ->when($request->query('psn'), fn ($q, $s) => $q->where('psn', app(UnitSerialisation::class)->normalize($s)))
             ->when($request->query('search'), fn ($q, $s) => $q->where(
                 fn ($qq) => $qq->where('serial_no', 'like', "%{$s}%")->orWhere('psn', 'like', "%{$s}%")
-            ))
-            ->orderByDesc('id')
-            ->limit($limit)
-            ->get();
-
-        return response()->json(['data' => $units]);
+            ));
     }
 
     public function show(SerialUnit $serialUnit): JsonResponse

@@ -590,12 +590,33 @@ GET /api/v1/serial-units?serial_no=<serial number>
 GET /api/v1/serial-units?psn=<process serial>
 GET /api/v1/serial-units?work_order_id=<id>&status=blocked
 GET /api/v1/serial-units?search=<part of a serial>
+GET /api/v1/serial-units?work_order_id=<id>&per_page=1000&before_id=12345
 Authorization: Bearer <token>
 ```
 
 `serial_no` and `psn` are exact matches, normalised the way the plant
 normalises scans (case and spacing, see Settings → System → Unit
-serialisation); `search` is a substring match. Newest first, 100 rows.
+serialisation); `search` is a substring match. Newest first.
+
+The list is paged by an id cursor, not by an offset: units keep being registered
+while a client reads them, so `page=N` would shift under the reader and rows
+would repeat or go missing between requests. `per_page` defaults to 100 and is
+clamped to 1000. `before_id` limits the answer to rows with a lower id; send the
+`meta.next_before_id` of the previous response as `before_id` and stop when
+`has_more` is false:
+
+```json
+{
+    "data": [ { "id": 1205 }, { "id": 1204 } ],
+    "meta": { "per_page": 1000, "total": 1205, "has_more": true, "next_before_id": 206 }
+}
+```
+
+`total` is the live count of the filtered set, cursor notwithstanding; `data`
+stays a plain list. A filter that matches nothing answers
+`{"data": [], "meta": {"per_page": 100, "total": 0, "has_more": false, "next_before_id": null}}`.
+A malformed `before_id` is rejected with a 422, never answered with an empty
+list that would read as "no more units".
 
 #### Unit History
 
