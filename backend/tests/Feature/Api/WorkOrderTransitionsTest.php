@@ -154,7 +154,9 @@ class WorkOrderTransitionsTest extends TestCase
 
     public function test_admin_can_update_pending_batch(): void
     {
-        $wo = $this->makeWO();
+        // planned_qty is explicit: the factory randomises it, and PATCH now runs
+        // the same planned-qty guard as store() (P2.5).
+        $wo = WorkOrder::factory()->create(['status' => WorkOrder::STATUS_PENDING, 'planned_qty' => 100]);
         $batch = Batch::factory()->create(['work_order_id' => $wo->id, 'status' => Batch::STATUS_PENDING, 'target_qty' => 10]);
 
         $this->authAdmin()->patchJson("/api/v1/batches/{$batch->id}", ['target_qty' => 25])
