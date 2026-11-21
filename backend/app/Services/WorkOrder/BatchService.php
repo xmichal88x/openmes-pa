@@ -682,7 +682,12 @@ class BatchService
     public function correctPackingQuantity(BatchStep $step, User $user, float $produced, string $reason): BatchStep
     {
         return DB::transaction(function () use ($step, $user, $produced, $reason) {
-            $step = BatchStep::whereKey($step->getKey())->lockForUpdate()->firstOrFail();
+            // The correction rewrites this batch's step *and* the order rollup, so
+            // it must serialise against every other write to the same order (P2.6):
+            // two corrections of different batches used to read the rollup in
+            // parallel and overwrite each other. Same lock order as every other
+            // quantity path: order first, then the step.
+            $step = $this->lockProductionStep($step);
 
             if (! $step->isPacking()) {
                 throw new \DomainException(__('Only a packing step carries the packed quantity (packing_correction_not_packing).'));
