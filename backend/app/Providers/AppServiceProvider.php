@@ -27,6 +27,9 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(ModuleManager::class, fn () => new ModuleManager);
         // Request-scoped: reads its settings once per request, so Octane sees a fresh copy each time.
         $this->app->scoped(\App\Support\UnitSerialisation::class);
+        // Same reason: a switch changed in the UI must apply to the next request,
+        // so the value is memoised per request rather than cached with a TTL.
+        $this->app->scoped(\App\Services\Settings\RuntimeSettings::class);
         // Request-scoped too: its per-bench cache is shared by the shared prop and the controllers.
         $this->app->scoped(\App\Services\Production\OperatorScreens::class);
         $this->app->singleton(MenuRegistry::class, fn () => new MenuRegistry);

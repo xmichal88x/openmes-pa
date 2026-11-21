@@ -241,6 +241,8 @@
     "All work orders": "All work orders",
     "Allow operators to record more units than the planned quantity.": "Allow operators to record more units than the planned quantity.",
     "Allow overproduction": "Allow overproduction",
+    "Source: database": "Source: database",
+    "Source: server configuration (ENV)": "Source: server configuration (ENV)",
     "Allow users to set a 4–6 digit numeric PIN for quick sign-in. Each user must first configure their PIN in Settings (requires current password). PIN login does not replace password login — it is an alternative method.": "Allow users to set a 4–6 digit numeric PIN for quick sign-in. Each user must first configure their PIN in Settings (requires current password). PIN login does not replace password login — it is an alternative method.",
     "Allowed Methods": "Allowed Methods",
     "Allowed Origins": "Allowed Origins",

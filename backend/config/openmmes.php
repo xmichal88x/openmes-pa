@@ -3,8 +3,14 @@
 return [
     /*
     |--------------------------------------------------------------------------
-    | Allow Overproduction
+    | Allow Overproduction (default only)
     |--------------------------------------------------------------------------
+    |
+    | The switch itself is a system setting (Settings -> System, stored in
+    | system_settings.allow_overproduction) read through
+    | App\Services\Settings\RuntimeSettings. This value is the declared default
+    | used when nothing is stored; the settings UI names that case as
+    | "source: env" instead of pretending a stored value answered.
     |
     | When enabled, allows produced_qty to exceed planned_qty on work orders.
     | When disabled, production stops exactly at planned_qty.

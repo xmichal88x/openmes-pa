@@ -287,6 +287,8 @@
     "ALL-ACCESS": "TRUY CẬP TẤT CẢ",
     "Allow operators to record more units than the planned quantity.": "Cho phép người vận hành ghi nhiều đơn vị hơn số lượng dự kiến.",
     "Allow overproduction": "Cho phép sản xuất thừa",
+    "Source: database": "Nguồn: cơ sở dữ liệu",
+    "Source: server configuration (ENV)": "Nguồn: cấu hình máy chủ (ENV)",
     "Allow users to set a 4–6 digit numeric PIN for quick sign-in. Each user must first configure their PIN in Settings (requires current password). PIN login does not replace password login — it is an alternative method.": "Cho phép người dùng đặt mã PIN số gồm 4–6 chữ số để đăng nhập nhanh. Trước tiên, mỗi người dùng phải định cấu hình mã PIN của mình trong Cài đặt (yêu cầu mật khẩu hiện tại). Đăng nhập bằng mã PIN không thay thế đăng nhập bằng mật khẩu - đó là một phương pháp thay thế.",
     "Allowed Methods": "Phương pháp được phép",
     "Allowed Origins": "Nguồn gốc được phép",

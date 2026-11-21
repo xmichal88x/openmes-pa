@@ -119,6 +119,8 @@
     "ALL-ACCESS": "PEŁNY DOSTĘP",
     "Allow operators to record more units than the planned quantity.": "Pozwól operatorom rejestrować więcej sztuk niż zaplanowana ilość.",
     "Allow overproduction": "Zezwalaj na nadprodukcję",
+    "Source: database": "Źródło: baza danych",
+    "Source: server configuration (ENV)": "Źródło: konfiguracja serwera (ENV)",
     "Already have an account?": "Masz już konto?",
     "amounts booked manually against the work order.": "kwoty zaksięgowane ręcznie na zleceniu.",
     "Analytics": "Analityka",

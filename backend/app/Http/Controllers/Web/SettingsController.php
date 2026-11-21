@@ -11,6 +11,7 @@ use App\Services\Dashboard\ProductionTargets;
 use App\Services\Quality\FirstPassYieldService;
 use App\Services\Settings\ConfigurationImporter;
 use App\Services\Settings\ProductionScenarioImporter;
+use App\Services\Settings\RuntimeSettings;
 use App\Services\Settings\ScenarioException;
 use App\Support\InspectionPermissions;
 use App\Support\ModuleRegistry;
@@ -127,7 +128,11 @@ class SettingsController extends Controller
 
         $settings = [
             'production_period' => json_decode($rows['production_period']?->value ?? '"none"', true) ?? 'none',
-            'allow_overproduction' => json_decode($rows['allow_overproduction']?->value ?? 'false', true) ?? false,
+            'allow_overproduction' => app(RuntimeSettings::class)->allowOverproduction(),
+            // Where that value came from: `database` (the switch below) or `env`
+            // (ALLOW_OVERPRODUCTION, applied because nothing is stored). Shown in
+            // the UI so an admin sees which one is in charge.
+            'allow_overproduction_source' => app(RuntimeSettings::class)->allowOverproductionSource(),
             'block_negative_stock' => json_decode($rows['block_negative_stock']?->value ?? 'false', true) ?? false,
             // Opt-out: an installation that was never asked reports.
             'telemetry_enabled' => json_decode($rows['telemetry_enabled']?->value ?? 'false', true) ?? false,

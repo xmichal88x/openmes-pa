@@ -764,16 +764,16 @@ class WorkOrder extends Model
     }
 
     /**
-     * Check if this work order is complete.
+     * Check if this work order is complete: produced at least the planned
+     * quantity.
+     *
+     * Completion is one comparison regardless of `allow_overproduction`. That
+     * switch decides whether reporting *above* the plan is permitted (the
+     * planned-quantity guard in BatchController::store), not when the order
+     * counts as complete - so it must not fork this method.
      */
     public function isComplete(): bool
     {
-        $allowOverproduction = config('openmmes.allow_overproduction', false);
-
-        if ($allowOverproduction) {
-            return $this->produced_qty >= $this->planned_qty;
-        }
-
         return (float) $this->produced_qty >= (float) $this->planned_qty;
     }
 

@@ -206,6 +206,8 @@
     "All work orders": "Alle Fertigungsaufträge",
     "Allow operators to record more units than the planned quantity.": "Bedienern erlauben, mehr Einheiten zu erfassen als geplant.",
     "Allow overproduction": "Überproduktion zulassen",
+    "Source: database": "Quelle: Datenbank",
+    "Source: server configuration (ENV)": "Quelle: Serverkonfiguration (ENV)",
     "Allow users to set a 4–6 digit numeric PIN for quick sign-in. Each user must first configure their PIN in Settings (requires current password). PIN login does not replace password login — it is an alternative method.": "Benutzern erlauben, eine 4- bis 6-stellige numerische PIN für die schnelle Anmeldung festzulegen. Jeder Benutzer muss seine PIN zunächst in den Einstellungen konfigurieren (erfordert das aktuelle Passwort). Die PIN-Anmeldung ersetzt nicht die Passwortanmeldung — sie ist eine alternative Methode.",
     "Allowed Methods": "Erlaubte Methoden",
     "Allowed Origins": "Erlaubte Ursprünge",

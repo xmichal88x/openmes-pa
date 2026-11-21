@@ -10,6 +10,7 @@ use App\Models\SerialUnit;
 use App\Models\WorkOrder;
 use App\Services\Lot\BatchReleaseService;
 use App\Services\Material\MaterialAllocationService;
+use App\Services\Settings\RuntimeSettings;
 use App\Services\WorkOrder\WorkOrderService;
 use App\Support\ApiValidationError;
 use Illuminate\Http\JsonResponse;
@@ -22,6 +23,7 @@ class BatchController extends Controller
         protected WorkOrderService $workOrderService,
         protected BatchReleaseService $releaseService,
         protected MaterialAllocationService $allocationService,
+        protected RuntimeSettings $runtimeSettings,
     ) {}
 
     /**
@@ -81,9 +83,9 @@ class BatchController extends Controller
             ->where(fn ($query) => $query->whereNull('is_replacement')->orWhere('is_replacement', false))
             ->where('status', '!=', Batch::STATUS_CANCELLED)
             ->sum('target_qty') + $validated['target_qty'];
-        $allowOverproduction = config('openmmes.allow_overproduction', false);
-
-        if (! $allowOverproduction && ($totalTargetQty - $workOrder->planned_qty) > 0.001) {
+        // The stored switch decides (Settings -> System), with the env var only as
+        // the declared default when nothing is stored - see RuntimeSettings.
+        if (! $this->runtimeSettings->allowOverproduction() && ($totalTargetQty - $workOrder->planned_qty) > 0.001) {
             return response()->json([
                 'message' => 'Total batch quantity would exceed planned quantity',
             ], 422);

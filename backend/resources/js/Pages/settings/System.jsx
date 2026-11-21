@@ -736,6 +736,13 @@ export default function System() {
                                         <div>
                                             <p className="text-[13px] font-medium text-om-ink">{__('Allow overproduction')}</p>
                                             <p className={HELP_CLASS}>{__('Allow operators to record more units than the planned quantity.')}</p>
+                                            {/* Which value is in charge: the switch above (database) or the
+                                                server configuration applied because nothing is stored. */}
+                                            <p className={HELP_CLASS} data-testid="allow-overproduction-source">
+                                                {settings.allow_overproduction_source === 'database'
+                                                    ? __('Source: database')
+                                                    : __('Source: server configuration (ENV)')}
+                                            </p>
                                         </div>
                                     </div>
 

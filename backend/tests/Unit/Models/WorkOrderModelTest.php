@@ -8,7 +8,9 @@ use App\Models\IssueType;
 use App\Models\Line;
 use App\Models\ProductType;
 use App\Models\WorkOrder;
+use App\Services\Settings\RuntimeSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class WorkOrderModelTest extends TestCase
@@ -179,6 +181,33 @@ class WorkOrderModelTest extends TestCase
         $this->workOrder->update(['planned_qty' => 100, 'produced_qty' => 110]);
 
         $this->assertTrue($this->workOrder->fresh()->isComplete());
+    }
+
+    /**
+     * P2.8 — the overproduction switch gates reporting above the plan, not the
+     * completeness rule: the answer is the same comparison either way (the dead
+     * branch that used to fork on the switch is gone).
+     */
+    public function test_is_complete_is_the_same_comparison_whatever_overproduction_says(): void
+    {
+        foreach ([true, false] as $allowOverproduction) {
+            config(['openmmes.allow_overproduction' => $allowOverproduction]);
+            DB::table('system_settings')->updateOrInsert(
+                ['key' => 'allow_overproduction'],
+                ['value' => json_encode($allowOverproduction), 'updated_at' => now()],
+            );
+            app(RuntimeSettings::class)->flush();
+
+            foreach ([[50, false], [100, true], [110, true]] as [$produced, $expected]) {
+                $this->workOrder->update(['planned_qty' => 100, 'produced_qty' => $produced]);
+
+                $this->assertSame(
+                    $expected,
+                    $this->workOrder->fresh()->isComplete(),
+                    "produced_qty={$produced}, allow_overproduction=".var_export($allowOverproduction, true),
+                );
+            }
+        }
     }
 
     // ── Scopes ───────────────────────────────────────────────────────────────

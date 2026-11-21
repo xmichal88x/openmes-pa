@@ -1093,6 +1093,8 @@
     "Admin Dashboard": "Yönetici Paneli",
     "Login Account": "Giriş Hesabı",
     "Allow overproduction": "Fazla üretime izin ver",
+    "Source: database": "Kaynak: veritabanı",
+    "Source: server configuration (ENV)": "Kaynak: sunucu yapılandırması (ENV)",
     "Previous": "Önceki",
     "Auto-generate LOT number": "LOT numarasını otomatik oluştur",
     "The service is temporarily unavailable. Please try again shortly.": "Hizmet geçici olarak kullanılamıyor. Lütfen kısa süre sonra tekrar deneyin.",
