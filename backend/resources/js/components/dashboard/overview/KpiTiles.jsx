@@ -58,7 +58,7 @@ function scrapTile(s) {
             // Two different empty states, named (P1.2): no evidence at all, or
             // batches that never declared where their quantity came from.
             ? (s.unknown_source_batches > 0
-                ? __('Quantity source unknown for :count batches', { count: s.unknown_source_batches })
+                ? __('Quantity source unknown · :count', { count: s.unknown_source_batches })
                 : __('No completed output this shift'))
             : __('Target ≤ :pct%', { pct: target(s.target_max_pct, 1) }),
         tone: s.tone,
