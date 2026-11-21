@@ -29,6 +29,7 @@ class ShiftHandoverTest extends TestCase
         $this->actingAs($this->admin, 'sanctum')
             ->getJson('/api/v1/shift-handover?line_id='.$this->line->id)
             ->assertStatus(200)
+            ->assertJsonPath('data.balance.produced_basis', 'shift_entries')
             ->assertJsonStructure([
                 'data' => [
                     'lines',
@@ -38,6 +39,7 @@ class ShiftHandoverTest extends TestCase
                         'shift_id',
                         'window',
                         'produced_qty',
+                        'produced_basis',
                         'good_qty',
                         'packed_qty',
                         'shipped_qty',

@@ -118,6 +118,7 @@ class ReportTest extends TestCase
                         'total_batches',
                         'total_produced',
                         'average_batch_size',
+                        'produced_basis',
                     ],
                     'batches' => [
                         '*' => [
@@ -128,6 +129,7 @@ class ReportTest extends TestCase
                             'line',
                             'target_qty',
                             'produced_qty',
+                            'produced_basis',
                             'started_at',
                             'completed_at',
                             'cycle_time_minutes',
@@ -141,6 +143,9 @@ class ReportTest extends TestCase
         $data = $response->json('data');
         $this->assertEquals(3, $data['summary']['total_batches']);
         $this->assertEquals(150, $data['summary']['total_produced']);
+        // P1.2: the number is a batch's step confirmation and says so.
+        $this->assertSame('batch_confirmation', $data['summary']['produced_basis']);
+        $this->assertSame('batch_confirmation', $data['batches'][0]['produced_basis']);
     }
 
     public function test_can_generate_downtime_report()

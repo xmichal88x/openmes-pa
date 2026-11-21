@@ -133,16 +133,20 @@ class AnalyticsTest extends TestCase
         $response->assertStatus(200)
             ->assertJsonStructure([
                 'data' => [
-                    'batches',
+                    'batches' => ['*' => ['batch_id', 'produced_qty', 'produced_basis', 'cycle_time_minutes']],
                     'average_cycle_time_minutes',
                     'average_cycle_time_hours',
                     'total_batches',
+                    'produced_basis',
                 ],
             ]);
 
         $data = $response->json('data');
         $this->assertEquals(1, $data['total_batches']);
         $this->assertGreaterThan(0, $data['average_cycle_time_minutes']);
+        // P1.2: cycle time measures a batch's step confirmation, stated as such.
+        $this->assertSame('batch_confirmation', $data['produced_basis']);
+        $this->assertSame('batch_confirmation', $data['batches'][0]['produced_basis']);
     }
 
     public function test_can_get_throughput_metrics()

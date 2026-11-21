@@ -237,4 +237,107 @@ class QualityFactsTest extends TestCase
         $this->assertNull($facts['total_qty']);
         $this->assertSame(1, $facts['unknown_source_batches']);
     }
+
+    // ── P1.2: per-batch facts ──────────────────────────────────────────
+
+    /** Each batch of a window keeps its own basis instead of one pooled ratio. */
+    public function test_per_batch_keeps_one_basis_per_row(): void
+    {
+        $workOrder = WorkOrder::factory()->create();
+
+        $withUnits = Batch::factory()->create([
+            'work_order_id' => $workOrder->id,
+            'status' => Batch::STATUS_DONE,
+            'produced_qty' => 2,
+            'scrap_qty' => 0,
+        ]);
+        $withUnits->setProducedQtySource(Batch::PRODUCED_QTY_SOURCE_UNITS);
+        $withUnits->save();
+        $this->packedUnit($workOrder, $withUnits);
+        $this->packedUnit($workOrder, $withUnits);
+
+        $declared = Batch::factory()->create([
+            'work_order_id' => $workOrder->id,
+            'status' => Batch::STATUS_DONE,
+            'produced_qty' => 10,
+            'scrap_qty' => 2,
+        ]);
+        $declared->setProducedQtySource(Batch::PRODUCED_QTY_SOURCE_MANUAL);
+        $declared->save();
+
+        $rows = $this->facts->perBatch(Batch::query()->whereKey([$withUnits->id, $declared->id])->get());
+
+        $this->assertCount(2, $rows);
+
+        $this->assertSame(QualityFacts::BASIS_UNITS, $rows[$withUnits->id]['basis']);
+        $this->assertEqualsWithDelta(2.0, $rows[$withUnits->id]['good_qty'], 0.001);
+        $this->assertEqualsWithDelta(2.0, $rows[$withUnits->id]['total_qty'], 0.001);
+        $this->assertFalse($rows[$withUnits->id]['unknown']);
+
+        $this->assertSame(QualityFacts::BASIS_DECLARED, $rows[$declared->id]['basis']);
+        $this->assertEqualsWithDelta(8.0, $rows[$declared->id]['good_qty'], 0.001);
+        $this->assertEqualsWithDelta(10.0, $rows[$declared->id]['total_qty'], 0.001);
+        $this->assertSame(80.0, $rows[$declared->id]['quality_pct']);
+
+        // A set of both evidences has no single basis and says so.
+        $this->assertSame(QualityFacts::BASIS_MIXED, QualityFacts::combinedBasis($rows));
+    }
+
+    /** A batch without a declared source is flagged, never counted or guessed. */
+    public function test_per_batch_flags_an_unknown_source(): void
+    {
+        $batch = Batch::factory()->create([
+            'work_order_id' => WorkOrder::factory()->create()->id,
+            'status' => Batch::STATUS_DONE,
+            'produced_qty' => 100,
+        ]);
+
+        $rows = $this->facts->perBatch(Batch::query()->whereKey($batch->id)->get());
+
+        $this->assertTrue($rows[$batch->id]['unknown']);
+        $this->assertNull($rows[$batch->id]['basis']);
+        $this->assertNull($rows[$batch->id]['good_qty']);
+        $this->assertNull($rows[$batch->id]['total_qty']);
+        $this->assertNull($rows[$batch->id]['quality_pct']);
+        $this->assertNull(QualityFacts::combinedBasis($rows));
+    }
+
+    /**
+     * The per-batch facts cost the same for 1 and for 10 batches: one grouped
+     * unit aggregate (plus the single-batch order lookup when units carry no
+     * batch), never a query per batch.
+     */
+    public function test_per_batch_query_count_does_not_follow_the_batch_count(): void
+    {
+        $measure = function (int $batchCount): int {
+            $workOrder = WorkOrder::factory()->create();
+            $batches = Batch::factory()->count($batchCount)->create([
+                'work_order_id' => $workOrder->id,
+                'status' => Batch::STATUS_DONE,
+                'produced_qty' => 1,
+            ]);
+
+            foreach ($batches as $batch) {
+                $batch->setProducedQtySource(Batch::PRODUCED_QTY_SOURCE_UNITS);
+                $batch->save();
+                $this->packedUnit($workOrder, $batch);
+            }
+
+            $loaded = Batch::query()->whereIn('id', $batches->pluck('id'))->get();
+
+            DB::flushQueryLog();
+            DB::enableQueryLog();
+            $this->facts->perBatch($loaded);
+            $queries = count(DB::getQueryLog());
+            DB::disableQueryLog();
+
+            return $queries;
+        };
+
+        $one = $measure(1);
+        $ten = $measure(10);
+
+        $this->assertSame($one, $ten, "perBatch must not scale with the batch count ({$one} vs {$ten})");
+        $this->assertLessThanOrEqual(2, $one, 'at most two queries per call');
+    }
 }

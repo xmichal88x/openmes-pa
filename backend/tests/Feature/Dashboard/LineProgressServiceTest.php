@@ -66,9 +66,16 @@ class LineProgressServiceTest extends TestCase
         ]);
     }
 
-    private function batch(WorkOrder $order, array $attributes): Batch
+    private function batch(WorkOrder $order, array $attributes, ?string $source = null): Batch
     {
-        return Batch::factory()->create(array_merge(['work_order_id' => $order->id], $attributes));
+        $batch = Batch::factory()->create(array_merge(['work_order_id' => $order->id], $attributes));
+
+        if ($source !== null) {
+            $batch->setProducedQtySource($source);
+            $batch->save();
+        }
+
+        return $batch;
     }
 
     /** @return array<string, mixed> */
@@ -185,8 +192,8 @@ class LineProgressServiceTest extends TestCase
     {
         $line = Line::factory()->create();
         $order = $this->order($line, ['planned_end_at' => null]);
-        $this->batch($order, ['status' => Batch::STATUS_DONE, 'produced_qty' => 46, 'started_at' => $this->at('09:00'), 'completed_at' => $this->at('09:30')]);
-        $this->batch($order, ['status' => Batch::STATUS_DONE, 'produced_qty' => 100, 'started_at' => $this->at('07:00'), 'completed_at' => $this->at('08:00')]);
+        $this->batch($order, ['status' => Batch::STATUS_DONE, 'produced_qty' => 46, 'started_at' => $this->at('09:00'), 'completed_at' => $this->at('09:30')], Batch::PRODUCED_QTY_SOURCE_MANUAL);
+        $this->batch($order, ['status' => Batch::STATUS_DONE, 'produced_qty' => 100, 'started_at' => $this->at('07:00'), 'completed_at' => $this->at('08:00')], Batch::PRODUCED_QTY_SOURCE_MANUAL);
 
         $row = $this->row($line, false);
 

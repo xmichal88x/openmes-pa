@@ -111,7 +111,12 @@ class AnalyticsController extends Controller
     }
 
     /**
-     * Get cycle time statistics
+     * Get cycle time statistics.
+     *
+     * `produced_qty` per batch is its **step confirmation** (R40/P2.12), stated
+     * as `produced_basis = batch_confirmation`: this endpoint measures cycle
+     * times, not good output. A re-cut replacement batch confirms the same
+     * physical piece again, so the figures are not additive as good pieces.
      */
     public function cycleTime(Request $request)
     {
@@ -139,6 +144,7 @@ class AnalyticsController extends Controller
                 'product_type' => $batch->workOrder->productType->name,
                 'target_qty' => $batch->target_qty,
                 'produced_qty' => $batch->produced_qty,
+                'produced_basis' => 'batch_confirmation',
                 'cycle_time_minutes' => $cycleTimeMinutes,
                 'cycle_time_hours' => round($cycleTimeMinutes / 60, 2),
                 'completed_at' => $batch->completed_at,
@@ -153,6 +159,7 @@ class AnalyticsController extends Controller
                 'average_cycle_time_minutes' => round($avgCycleTime, 2),
                 'average_cycle_time_hours' => round($avgCycleTime / 60, 2),
                 'total_batches' => $cycleTimeData->count(),
+                'produced_basis' => 'batch_confirmation',
             ],
         ]);
     }

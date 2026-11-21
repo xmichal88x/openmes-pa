@@ -14,6 +14,11 @@ use App\Support\ShiftWindow;
  * minus scrap = good, vs packed (scan logs) vs WIP (open pallets + unpacked)
  * vs shipped (shipped pallets), with the differences flagged. All figures are
  * scoped to the active shift window (ShiftWindow) and an optional production line.
+ *
+ * `produced_basis = shift_entries` says it out loud: the produced figure is what
+ * operators entered for the shift, which is not `work_orders.produced_qty`
+ * (good pieces) and not a batch confirmation. Three numbers on one shift screen
+ * would look interchangeable otherwise (P1.2).
  */
 class ShiftHandoverCalculator
 {
@@ -89,6 +94,9 @@ class ShiftHandoverCalculator
                 'business_date' => $window->businessDate,
             ],
             'produced_qty' => $produced,
+            // The shift flow is its own evidence: operator shift entries, not
+            // packed units and not batch confirmations. Stated, not implied.
+            'produced_basis' => 'shift_entries',
             'scrap_qty' => $scrap,
             'good_qty' => $good,
             'packed_qty' => $packed,

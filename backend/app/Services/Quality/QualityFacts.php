@@ -44,6 +44,10 @@ use Illuminate\Support\Collection;
  *    one ratio would quietly shrink the denominator, so the set is not added up
  *    at all. This never throws: the OEE cron must survive it.
  *
+ * Per batch (P1.2): {@see perBatch()} answers the same question for each batch
+ * of a window separately, so a report can state one basis per row instead of
+ * mixing evidences into a single number.
+ *
  * Query cost: a loaded `scrapEntries` relation costs nothing; the units are
  * always counted in one conditional aggregate, never from a relation, so the
  * cost is at most two queries whatever the batch or unit count (a relation may
@@ -56,6 +60,12 @@ class QualityFacts
 
     /** The record only has a declared quantity; scrap is separate evidence. */
     public const BASIS_DECLARED = 'declared';
+
+    /**
+     * A figure adding up rows of both evidences. It is neither basis, so it must
+     * not be labelled as one of them.
+     */
+    public const BASIS_MIXED = 'mixed';
 
     /** Unit statuses that left the line as goods (`PackedUnitQty` reads the same pair). */
     private const GOOD_STATUSES = [SerialUnit::STATUS_COMPLETED, SerialUnit::STATUS_SHIPPED];
@@ -112,6 +122,100 @@ class QualityFacts
         $facts['unknown_source_batches'] = $unknown;
 
         return $facts;
+    }
+
+    /**
+     * Quality of each batch separately, keyed by batch id (P1.2).
+     *
+     * A report that needs a *per batch* figure (operator rate, line rate, scrap
+     * rate) cannot divide one window-level total: two batches of the same window
+     * may rest on different evidence. Every row is computed under the same rule
+     * as {@see forBatches()}:
+     *
+     *  - `basis = units` when the batch has packed units (`packed_at`), so its
+     *    `produced_qty` already is good units and scrap is added, not subtracted;
+     *  - `basis = declared` otherwise, where `good = produced_qty - scrap`;
+     *  - a batch that never declared its source is returned with `unknown=true`
+     *    and null numbers, next to the rows that are known. It is never dropped
+     *    and never guessed: the caller states the gap.
+     *
+     * Cost: at most two queries, whatever the batch count - one grouped unit
+     * aggregate plus, only when some units carry no `batch_id`, the order lookup
+     * the I15 credit rule needs. The declared quantities come from the batch rows
+     * the caller already loaded.
+     *
+     * @param  Collection<int, Batch>|iterable<int, Batch>  $batches
+     * @return array<int, array{batch_id: int, work_order_id: int|null, basis: string|null, good_qty: float|null, scrap_qty: float, scrap_entries_qty: float, scrapped_units_qty: float, total_qty: float|null, quality_pct: float|null, unknown: bool}>
+     */
+    public function perBatch(Collection|iterable $batches): array
+    {
+        $batches = collect($batches);
+
+        if ($batches->isEmpty()) {
+            return [];
+        }
+
+        $unitsByBatch = $this->unitsByBatch($batches);
+        $noUnits = ['packed' => 0.0, 'scrapped' => 0.0, 'ever_packed' => 0.0];
+        $rows = [];
+
+        foreach ($batches as $batch) {
+            $batchId = (int) $batch->id;
+            $facts = $this->facts(
+                $unitsByBatch[$batchId] ?? $noUnits,
+                (float) $batch->scrap_qty,
+                (float) $batch->produced_qty,
+            );
+
+            $unknown = $batch->producedQtySource() === Batch::PRODUCED_QTY_SOURCE_UNKNOWN;
+
+            if ($unknown) {
+                $facts['basis'] = null;
+                $facts['good_qty'] = null;
+                $facts['total_qty'] = null;
+                $facts['quality_pct'] = null;
+            }
+
+            $rows[$batchId] = $facts + [
+                'batch_id' => $batchId,
+                'work_order_id' => $batch->work_order_id !== null ? (int) $batch->work_order_id : null,
+                'unknown' => $unknown,
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * One `produced_basis` for a set of per-batch rows.
+     *
+     * A row that adds up batches of both evidences has no single basis and is
+     * reported as `mixed` instead of picking one. An unknown batch makes the
+     * combined figure unstatable (null): summing only the known rows would
+     * quietly shrink the set.
+     *
+     * @param  iterable<int, array{basis: string|null, unknown: bool}>  $rows
+     */
+    public static function combinedBasis(iterable $rows): ?string
+    {
+        $bases = [];
+        $seen = false;
+
+        foreach ($rows as $row) {
+            $seen = true;
+
+            if ($row['unknown']) {
+                return null;
+            }
+
+            $bases[(string) $row['basis']] = true;
+        }
+
+        if (! $seen) {
+            return null;
+        }
+
+        return count($bases) === 1 ? (string) array_key_first($bases) : self::BASIS_MIXED;
     }
 
     /**
@@ -177,6 +281,101 @@ class QualityFacts
         });
 
         return $this->unitsAggregate($query);
+    }
+
+    /**
+     * Unit evidence per batch for {@see perBatch()}: the same three counts as
+     * {@see unitsAggregate()}, grouped by batch in a single query. The grouping
+     * carries `work_order_id` so units with no batch can be seen per order.
+     *
+     * Units carrying no batch are credited to their order's batch only when that
+     * order has exactly one batch (I15, the rule
+     * {@see \App\Services\Packaging\PackedUnitQty} applies) - with more than one
+     * crediting them anywhere would be a guess. That batch count is the second
+     * (and last) query, and it runs only when such units exist.
+     *
+     * @param  Collection<int, Batch>  $batches
+     * @return array<int, array{packed: float, scrapped: float, ever_packed: float}> batch id => counts
+     */
+    private function unitsByBatch(Collection $batches): array
+    {
+        $batchIds = $batches->pluck('id')->filter()->values()->all();
+        $orderIds = $batches->pluck('work_order_id')->filter()->unique()->values()->all();
+
+        if ($batchIds === []) {
+            return [];
+        }
+
+        $rows = SerialUnit::query()
+            ->where(function (Builder $query) use ($batchIds, $orderIds) {
+                $query->whereIn('batch_id', $batchIds);
+
+                if ($orderIds !== []) {
+                    $query->orWhere(fn (Builder $inner) => $inner
+                        ->whereNull('batch_id')
+                        ->whereIn('work_order_id', $orderIds));
+                }
+            })
+            ->groupBy('batch_id', 'work_order_id')
+            ->selectRaw(
+                'batch_id, work_order_id, '
+                .'COALESCE(SUM(CASE WHEN status IN (?, ?) AND packed_at IS NOT NULL THEN 1 ELSE 0 END), 0) as packed_units, '
+                .'COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) as scrapped_units, '
+                .'COALESCE(SUM(CASE WHEN packed_at IS NOT NULL THEN 1 ELSE 0 END), 0) as ever_packed_units',
+                [self::GOOD_STATUSES[0], self::GOOD_STATUSES[1], SerialUnit::STATUS_SCRAPPED],
+            )
+            ->get();
+
+        $byBatch = [];
+        $unattributed = [];
+
+        foreach ($rows as $row) {
+            $counts = [
+                'packed' => (float) $row->packed_units,
+                'scrapped' => (float) $row->scrapped_units,
+                'ever_packed' => (float) $row->ever_packed_units,
+            ];
+
+            if ($row->batch_id !== null) {
+                $byBatch[(int) $row->batch_id] = $counts;
+            } elseif ($row->work_order_id !== null) {
+                $unattributed[(int) $row->work_order_id] = $counts;
+            }
+        }
+
+        if ($unattributed === []) {
+            return $byBatch;
+        }
+
+        $singleBatchOrderIds = WorkOrder::query()
+            ->whereIn('id', array_keys($unattributed))
+            ->withCount('batches')
+            ->get(['id'])
+            ->filter(fn (WorkOrder $workOrder) => (int) $workOrder->batches_count === 1)
+            ->pluck('id')
+            ->all();
+
+        $batchByOrder = $batches->whereNotNull('work_order_id')->keyBy('work_order_id');
+
+        foreach ($singleBatchOrderIds as $orderId) {
+            $batch = $batchByOrder->get((int) $orderId);
+
+            if ($batch === null) {
+                continue;
+            }
+
+            $batchId = (int) $batch->id;
+            $current = $byBatch[$batchId] ?? ['packed' => 0.0, 'scrapped' => 0.0, 'ever_packed' => 0.0];
+            $extra = $unattributed[(int) $orderId];
+
+            $byBatch[$batchId] = [
+                'packed' => $current['packed'] + $extra['packed'],
+                'scrapped' => $current['scrapped'] + $extra['scrapped'],
+                'ever_packed' => $current['ever_packed'] + $extra['ever_packed'],
+            ];
+        }
+
+        return $byBatch;
     }
 
     /**

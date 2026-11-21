@@ -105,6 +105,8 @@ class ShiftHandoverTest extends TestCase
 
         $response->assertOk()
             ->assertJsonPath('balance.produced_qty', 100)
+            // P1.2: the shift flow has its own evidence, named on the payload.
+            ->assertJsonPath('balance.produced_basis', 'shift_entries')
             ->assertJsonPath('balance.scrap_qty', 10)
             ->assertJsonPath('balance.good_qty', 90)
             ->assertJsonPath('balance.packed_qty', 3)

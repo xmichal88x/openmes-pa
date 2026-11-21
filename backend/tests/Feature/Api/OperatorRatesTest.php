@@ -27,6 +27,10 @@ class OperatorRatesTest extends TestCase
     private function recordStep(User $operator, Workstation $workstation, float $producedQty, int $durationMinutes): void
     {
         $batch = Batch::factory()->create(['status' => Batch::STATUS_DONE, 'produced_qty' => $producedQty]);
+        // P1.2: the rate reads good pieces from the evidence, and a batch that
+        // never declared its source leaves the row empty.
+        $batch->setProducedQtySource(Batch::PRODUCED_QTY_SOURCE_MANUAL);
+        $batch->save();
         BatchStep::factory()->create([
             'batch_id' => $batch->id,
             'status' => BatchStep::STATUS_DONE,

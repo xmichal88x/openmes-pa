@@ -1026,6 +1026,8 @@ Authorization: Bearer <token>
 
 Supervisor and Admin roles required.
 
+Which "produced" number each endpoint returns: see [quantity-semantics.md](quantity-semantics.md).
+
 #### Production Summary Report
 
 ```http

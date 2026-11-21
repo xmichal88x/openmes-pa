@@ -5,6 +5,7 @@ namespace App\Services\Scrap;
 use App\Models\Batch;
 use App\Models\Line;
 use App\Models\ScrapEntry;
+use App\Services\Quality\QualityFacts;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 
@@ -17,6 +18,8 @@ use Illuminate\Support\Collection;
  */
 class ScrapReportService
 {
+    public function __construct(private readonly QualityFacts $qualityFacts) {}
+
     /**
      * Scrap entries in the period (optionally constrained to one line), with
      * their reason eager-loaded.
@@ -91,12 +94,39 @@ class ScrapReportService
     }
 
     /**
-     * Scrap rate per line over the period: total scrap quantity divided by the
-     * quantity produced (completed batches) on that line.
+     * Scrap rate per line over the period: the scrap of the line divided by the
+     * line's good pieces plus that scrap.
+     *
+     * Numerator - two separate evidences, each counted once:
+     *  - `scrap_entries` reported on the line in the window;
+     *  - units scrapped on the line's completed batches ({@see QualityFacts::perBatch()}),
+     *    which never create a ScrapEntry (`SerialTraceService::scrapUnit()` writes
+     *    the status only).
+     * A batch's own `scrap_qty` column is deliberately **not** added: the ledger
+     * write path (`BatchService::recordQuantity()`) records the same loss as a
+     * ScrapEntry too, so adding both would count it twice.
+     *
+     * Denominator - depends on the evidence the batches carry, because the two
+     * flows already account for scrap differently ({@see QualityFacts}):
+     *  - `units` batches: good pieces + the scrap above (a packed unit is good
+     *    output; the reported scrap was never in it);
+     *  - at least one `declared` batch: the declared totals (`total_qty`), which
+     *    already include the pieces that were lost - adding the reported scrap
+     *    again would count it twice.
+     * What it is never: `SUM(batches.produced_qty)` as "produced". That column is
+     * a step confirmation, and a re-cut replacement batch would put the same
+     * piece in the denominator a second time (RQ-PA-214).
+     *
+     * What cannot be stated stays empty:
+     *  - a line whose window holds a batch with no `produced_qty_source` gets
+     *    `produced_qty`, `total_qty`, `scrap_rate_pct` and `produced_basis` null,
+     *    plus `unknown_source_batches`;
+     *  - a line with no completed batch in the window has no produced evidence at
+     *    all: the same nulls, with `unknown_source_batches = 0`.
      */
     public function ratePerLine(Carbon $from, Carbon $to): array
     {
-        $scrapByLine = ScrapEntry::query()
+        $scrapEntriesByLine = ScrapEntry::query()
             ->join('work_orders', 'scrap_entries.work_order_id', '=', 'work_orders.id')
             ->whereBetween('scrap_entries.reported_at', [$from, $to])
             ->whereNotNull('work_orders.line_id')
@@ -104,16 +134,26 @@ class ScrapReportService
             ->selectRaw('work_orders.line_id as line_id, COALESCE(SUM(scrap_entries.quantity), 0) as scrap_qty')
             ->pluck('scrap_qty', 'line_id');
 
-        $producedByLine = Batch::query()
+        $batches = Batch::query()
             ->join('work_orders', 'batches.work_order_id', '=', 'work_orders.id')
             ->where('batches.status', Batch::STATUS_DONE)
             ->whereBetween('batches.completed_at', [$from, $to])
             ->whereNotNull('work_orders.line_id')
-            ->groupBy('work_orders.line_id')
-            ->selectRaw('work_orders.line_id as line_id, COALESCE(SUM(batches.produced_qty), 0) as produced_qty')
-            ->pluck('produced_qty', 'line_id');
+            ->select('batches.*', 'work_orders.line_id as line_id')
+            ->get();
 
-        $lineIds = $scrapByLine->keys()->merge($producedByLine->keys())->unique()->values();
+        $facts = $this->qualityFacts->perBatch($batches);
+
+        /** @var array<int, array<int, array>> $factsByLine */
+        $factsByLine = [];
+        foreach ($batches as $batch) {
+            $factsByLine[(int) $batch->line_id][] = $facts[(int) $batch->id];
+        }
+
+        $lineIds = $scrapEntriesByLine->keys()
+            ->merge(array_keys($factsByLine))
+            ->unique()
+            ->values();
 
         if ($lineIds->isEmpty()) {
             return [];
@@ -122,16 +162,37 @@ class ScrapReportService
         $lineNames = Line::whereIn('id', $lineIds)->pluck('name', 'id');
 
         return $lineIds
-            ->map(function ($lineId) use ($scrapByLine, $producedByLine, $lineNames) {
-                $scrap = round((float) $scrapByLine->get($lineId, 0), 2);
-                $produced = round((float) $producedByLine->get($lineId, 0), 2);
+            ->map(function ($lineId) use ($scrapEntriesByLine, $factsByLine, $lineNames) {
+                $rows = $factsByLine[(int) $lineId] ?? [];
+                $basis = QualityFacts::combinedBasis($rows);
+                $unknownBatches = count(array_filter($rows, fn (array $row) => $row['unknown']));
+                $scrappedUnits = (float) array_sum(array_column($rows, 'scrapped_units_qty'));
+                $scrap = round((float) $scrapEntriesByLine->get($lineId, 0) + $scrappedUnits, 2);
+
+                // No basis: either an unknown-source batch or no completed batch
+                // at all. Neither a zero nor a partial sum may stand in for it.
+                $good = $basis === null ? null : round((float) array_sum(array_column($rows, 'good_qty')), 2);
+
+                $declared = array_filter($rows, fn (array $row) => $row['basis'] === QualityFacts::BASIS_DECLARED);
+
+                $total = match (true) {
+                    $good === null => null,
+                    // A declared quantity is the attempt count: the reported scrap
+                    // is already inside it.
+                    $declared !== [] => round((float) array_sum(array_column($rows, 'total_qty')), 2),
+                    // Packed units are good output only: the lost pieces enter here.
+                    default => round($good + $scrap, 2),
+                };
 
                 return [
                     'line_id' => (int) $lineId,
-                    'line_name' => $lineNames->get($lineId, '#' . $lineId),
+                    'line_name' => $lineNames->get($lineId, '#'.$lineId),
                     'scrap_qty' => $scrap,
-                    'produced_qty' => $produced,
-                    'scrap_rate_pct' => $produced > 0 ? round(($scrap / $produced) * 100, 2) : null,
+                    'produced_qty' => $good,
+                    'total_qty' => $total,
+                    'scrap_rate_pct' => $total !== null && $total > 0 ? round(($scrap / $total) * 100, 2) : null,
+                    'produced_basis' => $basis,
+                    'unknown_source_batches' => $unknownBatches,
                 ];
             })
             ->sortByDesc('scrap_qty')

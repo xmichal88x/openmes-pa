@@ -52,9 +52,11 @@ export default function SupervisorDashboard() {
         },
         {
             id: 'units_per_hour',
-            accessorKey: 'units_per_hour',
+            // null = the pair's batches never declared a quantity source (P1.2):
+            // show the gap, never a zero.
+            accessorFn: (r) => (r.units_per_hour == null ? null : r.units_per_hour),
             header: __('Units/h'),
-            cell: ({ row }) => <span className="font-mono text-om-ink">{row.original.units_per_hour}</span>,
+            cell: ({ row }) => <span className="font-mono text-om-ink">{row.original.units_per_hour ?? '—'}</span>,
         },
         {
             id: 'steps_count',

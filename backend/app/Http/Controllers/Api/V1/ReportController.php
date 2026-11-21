@@ -77,7 +77,14 @@ class ReportController extends Controller
     }
 
     /**
-     * Generate batch completion report
+     * Generate batch completion report.
+     *
+     * `produced_qty` here is the batch's **step confirmation** (R40/P2.12), not
+     * the good pieces the ERP export and the dashboards use: a batch closes when
+     * its last step confirms a quantity, and a re-cut replacement batch carries
+     * its own confirmation for the same physical piece. The figure stays as it
+     * is because the report is about batch cycle times, and `produced_basis`
+     * says out loud what the number is.
      */
     public function batchCompletion(Request $request)
     {
@@ -108,6 +115,8 @@ class ReportController extends Controller
                 'total_batches' => $batches->count(),
                 'total_produced' => $batches->sum('produced_qty'),
                 'average_batch_size' => $batches->avg('target_qty'),
+                // Step confirmations - see the method docblock.
+                'produced_basis' => 'batch_confirmation',
             ],
             'batches' => $batches->map(function ($batch) {
                 $cycleTime = $batch->started_at && $batch->completed_at
@@ -122,6 +131,7 @@ class ReportController extends Controller
                     'line' => $batch->workOrder->line->name,
                     'target_qty' => $batch->target_qty,
                     'produced_qty' => $batch->produced_qty,
+                    'produced_basis' => 'batch_confirmation',
                     'started_at' => $batch->started_at,
                     'completed_at' => $batch->completed_at,
                     'cycle_time_minutes' => $cycleTime,

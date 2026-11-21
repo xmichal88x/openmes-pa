@@ -169,7 +169,10 @@ class ScrapApiTest extends TestCase
     public function test_scrap_rate_per_line(): void
     {
         $wo = WorkOrder::factory()->create();
-        Batch::factory()->done()->create(['work_order_id' => $wo->id, 'target_qty' => 100, 'produced_qty' => 100]);
+        $batch = Batch::factory()->done()->create(['work_order_id' => $wo->id, 'target_qty' => 100, 'produced_qty' => 100]);
+        // P1.2: the rate is computed from the evidence, so the batch states its source.
+        $batch->setProducedQtySource(Batch::PRODUCED_QTY_SOURCE_MANUAL);
+        $batch->save();
         $reason = ScrapReason::factory()->create();
         ScrapEntry::factory()->create(['work_order_id' => $wo->id, 'scrap_reason_id' => $reason->id, 'quantity' => 25, 'reported_at' => now()]);
 
@@ -180,7 +183,29 @@ class ScrapApiTest extends TestCase
         $this->assertNotNull($perLine);
         $this->assertEquals(25, $perLine['scrap_qty']);
         $this->assertEquals(100, $perLine['produced_qty']);
+        // Declared basis: the declared attempt count already holds the lost pieces.
+        $this->assertEquals(100, $perLine['total_qty']);
         $this->assertEquals(25, $perLine['scrap_rate_pct']);
+        $this->assertSame('declared', $perLine['produced_basis']);
+    }
+
+    public function test_scrap_rate_reports_an_unknown_source_instead_of_a_number(): void
+    {
+        // P1.2: a batch that never declared where its quantity came from makes the
+        // line's rate unstatable - null plus the count, never a partial sum.
+        $wo = WorkOrder::factory()->create();
+        Batch::factory()->done()->create(['work_order_id' => $wo->id, 'target_qty' => 100, 'produced_qty' => 100]);
+        $reason = ScrapReason::factory()->create();
+        ScrapEntry::factory()->create(['work_order_id' => $wo->id, 'scrap_reason_id' => $reason->id, 'quantity' => 25, 'reported_at' => now()]);
+
+        $perLine = collect($this->asAdmin()->getJson('/api/v1/reports/scrap-rate')->json('data.per_line'))
+            ->firstWhere('line_id', $wo->line_id);
+
+        $this->assertNull($perLine['produced_qty']);
+        $this->assertNull($perLine['total_qty']);
+        $this->assertNull($perLine['scrap_rate_pct']);
+        $this->assertNull($perLine['produced_basis']);
+        $this->assertSame(1, $perLine['unknown_source_batches']);
     }
 
     public function test_operator_cannot_access_scrap_reports(): void

@@ -45,7 +45,9 @@ export default function ScrapReportsIndex() {
     const rateColumns = [
         { id: 'line_name', accessorKey: 'line_name', header: __('Line'), cell: ({ row }) => <span className="font-medium text-om-ink">{row.original.line_name}</span> },
         { id: 'scrap_qty', accessorFn: (r) => num(r.scrap_qty), header: __('Scrap'), cell: ({ row }) => <span className="tabular-nums">{fmt(row.original.scrap_qty)}</span>, meta: { align: 'right' } },
-        { id: 'produced_qty', accessorFn: (r) => num(r.produced_qty), header: __('Produced'), cell: ({ row }) => <span className="tabular-nums">{fmt(row.original.produced_qty)}</span>, meta: { align: 'right' } },
+        // null = the line's window holds a batch with no declared quantity source
+        // (or no completed batch at all): show the gap, never a zero (P1.2).
+        { id: 'produced_qty', accessorFn: (r) => (r.produced_qty == null ? null : num(r.produced_qty)), header: __('Produced'), cell: ({ row }) => <span className="tabular-nums">{row.original.produced_qty == null ? '—' : fmt(row.original.produced_qty)}</span>, meta: { align: 'right' } },
         { id: 'scrap_rate_pct', accessorFn: (r) => num(r.scrap_rate_pct), header: __('Scrap rate'), cell: ({ row }) => <span className="tabular-nums font-medium">{row.original.scrap_rate_pct != null ? num(row.original.scrap_rate_pct).toFixed(2) + '%' : '—'}</span>, meta: { align: 'right' } },
     ];
 

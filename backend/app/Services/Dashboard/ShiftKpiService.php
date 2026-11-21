@@ -104,12 +104,19 @@ class ShiftKpiService
     }
 
     /**
-     * Scrap ÷ produced (completed batches) over the shift, with the Scrap
-     * Reports page's maths. ScrapEntry and Batch carry no tenant scope and that
-     * query joins work_orders without one, so rows are kept to the
-     * tenant-scoped active lines the header already loaded.
+     * Scrap ÷ the line's own denominator over the shift, with the Scrap Reports
+     * page's maths ({@see \App\Services\Scrap\ScrapReportService::ratePerLine()}):
+     * the report states both the good pieces and the denominator its rate
+     * divides by, so this tile must not divide by `produced_qty` itself - that
+     * would give the same shift two different scrap rates (P1.2).
      *
-     * @return array{rate_pct: ?float, scrap_qty: float, produced_qty: float, target_max_pct: float, tone: string}
+     * A line whose quantity evidence is unknown makes the tile unstatable: rate
+     * null (mute), never a partial sum over the rows that happen to be known.
+     * ScrapEntry and Batch carry no tenant scope and the query joins
+     * work_orders without one, so rows are kept to the tenant-scoped active
+     * lines the header already loaded.
+     *
+     * @return array{rate_pct: ?float, scrap_qty: float, produced_qty: ?float, total_qty: ?float, unknown_source_batches: int, target_max_pct: float, tone: string}
      */
     private function scrapRate(ShiftWindow $window, array $lineStates): array
     {
@@ -120,9 +127,11 @@ class ShiftKpiService
             ? collect()
             : collect($this->scrap->ratePerLine($window->start, $window->end))->whereIn('line_id', $lineIds);
 
+        $unstatable = $rows->contains(fn (array $row) => $row['total_qty'] === null);
         $scrap = round((float) $rows->sum('scrap_qty'), 2);
-        $produced = round((float) $rows->sum('produced_qty'), 2);
-        $rate = $produced > 0 ? round($scrap / $produced * 100, 2) : null;
+        $produced = $unstatable ? null : round((float) $rows->sum('produced_qty'), 2);
+        $total = $unstatable ? null : round((float) $rows->sum('total_qty'), 2);
+        $rate = $total !== null && $total > 0 ? round($scrap / $total * 100, 2) : null;
 
         $tone = match (true) {
             $rate === null => 'mute',
@@ -135,6 +144,9 @@ class ShiftKpiService
             'rate_pct' => $rate,
             'scrap_qty' => $scrap,
             'produced_qty' => $produced,
+            'total_qty' => $total,
+            // Why the tile can be empty: a batch of the shift declared no source.
+            'unknown_source_batches' => (int) $rows->sum('unknown_source_batches'),
             'target_max_pct' => $target,
             'tone' => $tone,
         ];

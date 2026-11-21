@@ -216,10 +216,14 @@ class DashboardKpiTilesTest extends TestCase
     private function produced(Line $line, float $qty, string $at): WorkOrder
     {
         $order = $this->order(['line_id' => $line->id, 'status' => WorkOrder::STATUS_IN_PROGRESS]);
-        Batch::factory()->create([
+        $batch = Batch::factory()->create([
             'work_order_id' => $order->id, 'status' => Batch::STATUS_DONE,
             'produced_qty' => $qty, 'completed_at' => $this->at($at),
         ]);
+        // P1.2: the tile's scrap rate divides by the denominator the batch's
+        // evidence supports, so the figure has to declare where it came from.
+        $batch->setProducedQtySource(Batch::PRODUCED_QTY_SOURCE_MANUAL);
+        $batch->save();
 
         return $order;
     }
@@ -241,6 +245,7 @@ class DashboardKpiTilesTest extends TestCase
 
         $this->assertSame(6.0, (float) $scrap['scrap_qty']);
         $this->assertSame(200.0, (float) $scrap['produced_qty']);
+        $this->assertSame(200.0, (float) $scrap['total_qty'], 'declared total, which already holds the scrap');
         $this->assertSame(3.0, (float) $scrap['rate_pct']);
 
         // Same maths as the Scrap Reports page for the same window.
@@ -266,6 +271,27 @@ class DashboardKpiTilesTest extends TestCase
         $scrap = $this->kpis()['scrap'];
 
         $this->assertNull($scrap['rate_pct']);
+        $this->assertSame('mute', $scrap['tone']);
+    }
+
+    /** P1.2: a batch that declared no source leaves the tile empty, and says why. */
+    public function test_scrap_tile_names_an_unknown_quantity_source(): void
+    {
+        $line = Line::factory()->create(['is_active' => true]);
+        $order = $this->order(['line_id' => $line->id, 'status' => WorkOrder::STATUS_IN_PROGRESS]);
+        Batch::factory()->create([
+            'work_order_id' => $order->id, 'status' => Batch::STATUS_DONE,
+            'produced_qty' => 100, 'completed_at' => $this->at('09:00'),
+        ]);
+        $this->scrap($order, 3, $this->at('09:00'));
+
+        $scrap = $this->kpis()['scrap'];
+
+        $this->assertNull($scrap['rate_pct'], 'no basis: null, never a partial sum');
+        $this->assertNull($scrap['produced_qty']);
+        $this->assertNull($scrap['total_qty']);
+        $this->assertSame(1, $scrap['unknown_source_batches']);
+        $this->assertSame(3.0, (float) $scrap['scrap_qty'], 'the scrap itself is still a fact');
         $this->assertSame('mute', $scrap['tone']);
     }
 

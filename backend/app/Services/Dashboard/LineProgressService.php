@@ -6,6 +6,7 @@ use App\Models\Batch;
 use App\Models\MachineEvent;
 use App\Models\WorkOrder;
 use App\Models\Workstation;
+use App\Services\Quality\QualityFacts;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 
@@ -25,8 +26,17 @@ use Illuminate\Support\Collection;
  *    station, then the MAX over the line's stations. On a serial line every
  *    piece passes every station, so that is the line's output without double
  *    counting; on parallel stations it undercounts;
- *  - a line without one: `produced_qty` of the current order's batches that
- *    were completed in the window.
+ *  - a line without one: the **good pieces** of the current order's batches
+ *    completed in the window ({@see QualityFacts::perBatch()}), so the rate and
+ *    the card's progress rest on the same evidence - `work_orders.produced_qty`
+ *    is good pieces too. It is never `SUM(batches.produced_qty)`, which is a
+ *    step confirmation: that would show one "produced" for the progress and
+ *    another for the rate.
+ *
+ * `produced_basis` says which evidence the rate rests on: `units` / `declared`
+ * (from the batch facts, `mixed` when both), `machine_counter` for a collector
+ * line, or null when no rate can be stated (a batch of the window has no
+ * declared source - `unknown_source_batches` names how many).
  *
  * ETA — remaining quantity ÷ rate; with no rate, the order's `planned_end_at`.
  * "Late" when the ETA is after `planned_end_at` (with no rate: when
@@ -40,15 +50,20 @@ class LineProgressService
 {
     private const RATE_WINDOW_MINUTES = 60;
 
+    /** The rate came from machine counter events, not from a batch quantity. */
+    private const BASIS_MACHINE_COUNTER = 'machine_counter';
+
     /** Order statuses a line can be "on", best candidates first. */
     private const CURRENT_TIERS = [
         [WorkOrder::STATUS_IN_PROGRESS],
         [WorkOrder::STATUS_BLOCKED, WorkOrder::STATUS_PAUSED],
     ];
 
+    public function __construct(private readonly QualityFacts $qualityFacts) {}
+
     /**
      * @param  array<int, array{id: int, has_collector: bool}>  $lines  PlantOverviewService::lineStates() rows
-     * @return array<int, array{line_id: int, order: ?array<string, mixed>, more_count: int, rate_per_hour: ?float, eta: ?string, eta_source: ?string, late: bool}>
+     * @return array<int, array{line_id: int, order: ?array<string, mixed>, more_count: int, rate_per_hour: ?float, produced_basis: string|null, unknown_source_batches: int, eta: ?string, eta_source: ?string, late: bool}>
      */
     public function forLines(array $lines, Carbon $now): array
     {
@@ -90,6 +105,8 @@ class LineProgressService
                     'order' => null,
                     'more_count' => 0,
                     'rate_per_hour' => null,
+                    'produced_basis' => null,
+                    'unknown_source_batches' => 0,
                     'eta' => null,
                     'eta_source' => null,
                     'late' => false,
@@ -98,7 +115,7 @@ class LineProgressService
 
             $rate = $line['has_collector']
                 ? ($machineRate[$line['id']] ?? null)
-                : ($batchRate[$order->id] ?? null);
+                : ($batchRate['rates'][$order->id] ?? null);
             $rate = $rate !== null && $rate > 0 ? round($rate, 2) : null;
 
             $planned = (float) $order->planned_qty;
@@ -119,6 +136,12 @@ class LineProgressService
                 ],
                 'more_count' => $more[$line['id']],
                 'rate_per_hour' => $rate,
+                'produced_basis' => $line['has_collector']
+                    ? self::BASIS_MACHINE_COUNTER
+                    : ($batchRate['bases'][$order->id] ?? null),
+                'unknown_source_batches' => $line['has_collector']
+                    ? 0
+                    : ($batchRate['unknown'][$order->id] ?? 0),
                 'eta' => $eta['eta']?->toIso8601String(),
                 'eta_source' => $eta['source'],
                 'late' => $eta['late'],
@@ -246,26 +269,60 @@ class LineProgressService
     }
 
     /**
-     * Pieces per hour per order, from its batches completed in the window.
+     * Pieces per hour per order, from the **good pieces** of its batches
+     * completed in the window.
+     *
+     * The card's progress already shows good pieces (`work_orders.produced_qty`,
+     * R40/P2.12), so the rate must use the same evidence: `SUM(batches.produced_qty)`
+     * would put a step confirmation next to it - two "produced" numbers on one
+     * screen. A batch with no declared quantity source makes the order's rate
+     * unstatable: the order is left out of `rates` (null on the card), never
+     * counted as zero, and `unknown` names how many such batches the window holds.
      *
      * @param  Collection<int, int>  $orderIds
-     * @return array<int, float> order id → pieces per hour
+     * @return array{rates: array<int, float>, bases: array<int, string|null>, unknown: array<int, int>}
      */
     private function batchRateByOrder(Collection $orderIds, Carbon $from, Carbon $to): array
     {
+        $empty = ['rates' => [], 'bases' => [], 'unknown' => []];
+
         if ($orderIds->isEmpty()) {
-            return [];
+            return $empty;
+        }
+
+        $batches = Batch::query()
+            ->whereIn('work_order_id', $orderIds->values())
+            ->where('completed_at', '>=', $from)
+            ->where('completed_at', '<', $to)
+            ->get(['id', 'work_order_id', 'produced_qty', 'scrap_qty', 'extra_data']);
+
+        if ($batches->isEmpty()) {
+            return $empty;
+        }
+
+        $facts = $this->qualityFacts->perBatch($batches);
+
+        /** @var array<int, array<int, array>> $factsByOrder */
+        $factsByOrder = [];
+        foreach ($batches as $batch) {
+            $factsByOrder[(int) $batch->work_order_id][] = $facts[(int) $batch->id];
         }
 
         $perHour = 60 / self::RATE_WINDOW_MINUTES;
+        $out = $empty;
 
-        return Batch::whereIn('work_order_id', $orderIds->values())
-            ->where('completed_at', '>=', $from)
-            ->where('completed_at', '<', $to)
-            ->groupBy('work_order_id')
-            ->selectRaw('work_order_id, SUM(produced_qty) as qty')
-            ->pluck('qty', 'work_order_id')
-            ->map(fn ($qty) => (float) $qty * $perHour)
-            ->all();
+        foreach ($factsByOrder as $orderId => $rows) {
+            $basis = QualityFacts::combinedBasis($rows);
+            $out['bases'][$orderId] = $basis;
+            $out['unknown'][$orderId] = count(array_filter($rows, fn (array $row) => $row['unknown']));
+
+            if ($basis === null) {
+                continue;
+            }
+
+            $out['rates'][$orderId] = (float) array_sum(array_column($rows, 'good_qty')) * $perHour;
+        }
+
+        return $out;
     }
 }
