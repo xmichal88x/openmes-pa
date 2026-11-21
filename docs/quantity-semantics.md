@@ -46,6 +46,41 @@ the transfer production flow (the step ledger is). See `WorkOrderProducedQty`
 for the exact rules; reports that need "the order's good pieces" read
 `work_orders.produced_qty` and inherit whichever policy is active.
 
+## Hold / unblock and the quantity
+
+A hold is a physical fact ("this piece may not go on"), so `block` always lands.
+What follows for the numbers depends on where the batch's figure comes from —
+and a figure that is a declaration is never rewritten by a unit event.
+
+| Step | What it does | Where |
+|---|---|---|
+| `POST /api/v1/serial-units/{id}/block` (`SerialTraceService::blockUnit()`) | Sets `status = blocked`, writes `extra_data.hold` (reason code/source), records a `blocked` event in the unit's history, recomputes the pallet's quality gate, then re-derives the quantities as `blocked`. | `backend/app/Services/Traceability/SerialTraceService.php:557-584` |
+| `POST /api/v1/serial-units/{id}/unblock` (`SerialTraceService::unblockUnit()`) | Requires `status = blocked` (otherwise `422` *is not blocked*), restores `packed_at ? completed : in_production`, clears `extra_data.hold`, records an `unblocked` event, recomputes the pallet, then re-derives the quantities as `unblocked`. | `backend/app/Services/Traceability/SerialTraceService.php:592-613` |
+
+The release stores no "restore": the quantity is recounted from the unit's new
+status by the same single path (`UnitProducedQtySync::afterStatusChange()` →
+`recomputeBatch()`, `backend/app/Services/WorkOrder/UnitProducedQtySync.php:64-163`).
+
+When the quantity comes back, and when it stays:
+
+| Batch source / policy | `block` | `unblock` | Why |
+|---|---|---|---|
+| `units` | Recounted **down** — the held unit is no longer a good unit (`PackedUnitQty`: `packed_at` + `completed\|shipped`) | Recounted **up** — the released unit counts again | The number is the packed units the MES counts now, in both directions |
+| `units`, unit never packed | No change (it was never in the count) | No change: status returns as `in_production`, not `completed` | A good unit is a **packed** unit (`serial_units.packed_at`, P2.12) — a release must not conjure a piece that never left the line |
+| `manual` / `machine` | **Unchanged** + `produced_qty_declared_unchanged` | **Unchanged** + `produced_qty_declared_unchanged` | A human or a collector stated the figure; a unit event does not rewrite a declaration. A correction goes through the packing quantity |
+| `counting_source = machine\|both` | **Unchanged** + `produced_qty_machine_counter` | **Unchanged** + `produced_qty_machine_counter` | The PLC counter owns the order's number |
+| transfer flow | **Unchanged** + `produced_qty_transfer_ledger` | **Unchanged** + `produced_qty_transfer_ledger` | The step ledger (`passed_qty`) owns the batch; corrections belong to `correctGoodQuantity` |
+| `unknown` in a finished batch | Batch untouched + `produced_qty_source_unknown` (rollup blocked, audit row `produced_qty_rollup_blocked`) | same | Nothing records where the figure came from, so it is not re-derived |
+
+The notices are part of the answer, not of the logs: both endpoints return
+`warnings[]` next to `data`
+(`backend/app/Http/Controllers/Api/V1/SerialUnitController.php:127-154`, fed by
+`SerialTraceService::takeProducedQtyWarnings()`, `SerialTraceService.php:626-632`).
+An empty array means the figure *was* re-derived; a non-empty one names what
+could not be. The station screen also appends those messages to its `message`
+field (`UnitLabelStationController::unitAnswer()`), because the toast renders
+`message`, not `warnings[]`.
+
 ## Bases a report can state
 
 | `produced_basis` | Meaning |
