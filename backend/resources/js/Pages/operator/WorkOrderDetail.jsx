@@ -2373,7 +2373,7 @@ function EngineeringDocsSection({ docs = [], onView }) {
 // ---------------------------------------------------------------------------
 
 export default function WorkOrderDetail() {
-    const { workOrder, issueTypes = [], scrapReasons = [], workstations = [], issueCustomFields = [], defaultWorkstationId, line, labelTemplates = [], processPhotos = [], stepPhotos = {}, stepMedia = {}, stepChecklists = {}, stepOutputs = {}, engineeringDocuments = [], materialShortages = [], flowMode = 'whole_batch', selectedWorkstation = null, serialUnits = { total: 0, units: [] }, hooks = {}, machineCommandCaps = {} } = usePage().props;
+    const { workOrder, issueTypes = [], scrapReasons = [], workstations = [], issueCustomFields = [], defaultWorkstationId, line, labelTemplates = [], processPhotos = [], stepPhotos = {}, stepMedia = {}, stepChecklists = {}, stepOutputs = {}, engineeringDocuments = [], materialShortages = [], flowMode = 'whole_batch', selectedWorkstation = null, serialUnits = { total: 0, units: [] }, hooks = {}, machineCommandCaps = {}, quality = null } = usePage().props;
 
     const [engViewer, setEngViewer] = useState(null); // { url, title } for the sandboxed viewer
 
@@ -2409,8 +2409,17 @@ export default function WorkOrderDetail() {
     const canReportScrap = !hasStepLedger && scrapReasons.length > 0 && !['DONE', 'CANCELLED'].includes(workOrder.status);
 
     const scrapEntries = workOrder.scrap_entries ?? [];
-    const totalScrap = scrapEntries.reduce((sum, e) => sum + Number(e.quantity ?? 0), 0);
-    const qualityPct = producedQty > 0 ? (Math.max(0, producedQty - totalScrap) / producedQty) * 100 : null;
+    // Quality comes from the server (QualityFacts) with its breakdown: the basis
+    // depends on the evidence the order carries (packed units vs a declared
+    // quantity), so this page must never derive the ratio itself.
+    const qualityPct = quality?.quality_pct ?? null;
+    const totalScrap = Number(quality?.scrap_qty ?? 0);
+    const qualityTitle =
+        qualityPct === null
+            ? undefined
+            : `${__('Good')}: ${fmtQty(quality?.good_qty)} · ${__('Scrap')}: ${fmtQty(quality?.scrap_qty)} (${__(
+                  'Scrap entries'
+              )}: ${fmtQty(quality?.scrap_entries_qty)}, ${__('Scrapped')}: ${fmtQty(quality?.scrapped_units_qty)})`;
 
     const dueDateStr = workOrder.due_date;
     const dueDatePast = dueDateStr && new Date(dueDateStr) < new Date() && workOrder.status !== 'DONE';
@@ -2714,9 +2723,15 @@ export default function WorkOrderDetail() {
                             {qualityPct !== null && (
                                 <div className="flex justify-between items-baseline text-sm mb-3">
                                     <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-om-faint">{__('Quality:')}</span>
-                                    <span className={`font-mono text-[15px] font-medium ${qualityPct < 100 ? 'text-om-downtime' : 'text-om-running'}`}>
-                                        {qualityPct.toFixed(1)}%
-                                    </span>
+                                    <Tooltip label={qualityTitle}>
+                                        <span
+                                            className={`font-mono text-[15px] font-medium ${qualityPct < 100 ? 'text-om-downtime' : 'text-om-running'}`}
+                                            data-testid="work-order-quality"
+                                            data-quality-basis={quality?.basis ?? ''}
+                                        >
+                                            {qualityPct.toFixed(1)}%
+                                        </span>
+                                    </Tooltip>
                                 </div>
                             )}
 

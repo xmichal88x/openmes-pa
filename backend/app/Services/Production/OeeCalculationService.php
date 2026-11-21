@@ -7,14 +7,16 @@ use App\Models\Line;
 use App\Models\OeeRecord;
 use App\Models\ProcessTemplate;
 use App\Models\Shift;
+use App\Services\Quality\QualityFacts;
 use App\Support\ShiftWindow;
 use Carbon\Carbon;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class OeeCalculationService
 {
     public function __construct(
         protected DowntimeService $downtimeService,
+        protected QualityFacts $qualityFacts,
     ) {}
 
     /**
@@ -37,11 +39,33 @@ class OeeCalculationService
         $netPlannedMinutes = $plannedMinutes - $plannedDowntime;
         $operatingMinutes = max(0, $netPlannedMinutes - $lossDowntime);
 
-        // Production data
+        // Production data. The quality ratio is not derived here: the basis
+        // depends on the evidence the batches carry (packed units vs a declared
+        // quantity), and only {@see QualityFacts} may decide that (P2.7).
         $productionData = $this->getProductionData($line, $date, $shift);
         $totalProduced = $productionData['total_produced'];
-        $scrapQty = $productionData['scrap_qty'];
-        $goodProduced = $totalProduced - $scrapQty;
+        $qualityFacts = $this->qualityFacts->forBatches($productionData['batches']);
+
+        if ($qualityFacts['unknown_source_batches'] > 0) {
+            // A cron must not die on a batch that never declared its source, and
+            // it must not invent a ratio either: quality is left empty (null)
+            // and the gap is named in the log.
+            Log::warning('oee.quality_basis_unknown: window has batches with no produced_qty source, quality left empty', [
+                'line_id' => $line->id,
+                'record_date' => $date->toDateString(),
+                'shift_id' => $shift?->id,
+                'unknown_source_batches' => $qualityFacts['unknown_source_batches'],
+            ]);
+        }
+
+        $quality = $qualityFacts['quality_pct'];
+        $scrapQty = (float) $qualityFacts['scrap_qty'];
+        $goodProduced = $qualityFacts['good_qty'];
+        // Under the `units` basis the ratio's denominator (good + scrap) is not
+        // the sum of `produced_qty`; store the ratio's own total so the record
+        // reconciles (good + scrap = total). Performance below keeps the
+        // produced figure it always used.
+        $recordedProduced = $qualityFacts['total_qty'] ?? $totalProduced;
 
         // Ideal cycle time
         $idealCycle = $this->getIdealCycleTime($line, $date, $shift);
@@ -53,10 +77,6 @@ class OeeCalculationService
 
         $performance = ($operatingMinutes > 0 && $idealCycle > 0)
             ? (($totalProduced * $idealCycle) / $operatingMinutes) * 100
-            : null;
-
-        $quality = $totalProduced > 0
-            ? ($goodProduced / $totalProduced) * 100
             : null;
 
         // Cap performance at 100% to avoid nonsensical values
@@ -81,7 +101,7 @@ class OeeCalculationService
                 'operating_minutes' => $operatingMinutes,
                 'downtime_minutes' => $lossDowntime,
                 'ideal_cycle_minutes' => $idealCycle,
-                'total_produced' => $totalProduced,
+                'total_produced' => $recordedProduced,
                 'good_produced' => $goodProduced,
                 'scrap_qty' => $scrapQty,
                 'availability_pct' => $availability !== null ? round($availability, 2) : null,
@@ -156,7 +176,13 @@ class OeeCalculationService
     }
 
     /**
-     * Get production quantities for a line on a given date/shift.
+     * Get the batches that closed inside the window, plus their recorded totals.
+     *
+     * The rows (not an SQL aggregate) are returned because the quality ratio is
+     * derived from the evidence they carry - packed units, scrapped units and
+     * `produced_qty_source` - which a sum cannot express. One query either way.
+     *
+     * @return array{total_produced: float, scrap_qty: float, batches: \Illuminate\Support\Collection<int, Batch>}
      */
     private function getProductionData(Line $line, Carbon $date, ?Shift $shift): array
     {
@@ -177,14 +203,12 @@ class OeeCalculationService
             $query->whereDate('completed_at', $date);
         }
 
-        $totals = $query->select([
-            DB::raw('COALESCE(SUM(produced_qty), 0) as total_produced'),
-            DB::raw('COALESCE(SUM(scrap_qty), 0) as scrap_qty'),
-        ])->first();
+        $batches = $query->get();
 
         return [
-            'total_produced' => (float) ($totals->total_produced ?? 0),
-            'scrap_qty' => (float) ($totals->scrap_qty ?? 0),
+            'total_produced' => (float) $batches->sum(fn (Batch $batch) => (float) $batch->produced_qty),
+            'scrap_qty' => (float) $batches->sum(fn (Batch $batch) => (float) $batch->scrap_qty),
+            'batches' => $batches,
         ];
     }
 

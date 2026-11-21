@@ -319,7 +319,7 @@ class TraceabilityDemoSeeder extends Seeder
 
     private function batch(WorkOrder $order, int $number, string $lot, int $target, int $produced, string $status, Carbon $startedAt, ?Carbon $completedAt): Batch
     {
-        return Batch::create([
+        $batch = new Batch([
             'work_order_id' => $order->id,
             'batch_number' => $number,
             'lot_number' => $lot,
@@ -329,6 +329,11 @@ class TraceabilityDemoSeeder extends Seeder
             'started_at' => $startedAt,
             'completed_at' => $completedAt,
         ]);
+        // Demo data states its figure, so it declares it. Without a source a
+        // closed batch makes OEE quality (correctly) N/A instead of a number.
+        $batch->setProducedQtySource(Batch::PRODUCED_QTY_SOURCE_MANUAL);
+
+        return tap($batch)->save();
     }
 
     /** $minutes null = still running. Times and quantities are what a station timeline will plot. */

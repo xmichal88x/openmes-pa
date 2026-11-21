@@ -127,6 +127,26 @@ class ScrapApiTest extends TestCase
             ->assertJsonPath('meta.quality_pct', 75); // (200-50)/200
     }
 
+    public function test_work_order_scrap_listing_exposes_the_quality_breakdown(): void
+    {
+        // P2.7: the API says which basis the percentage rests on, so a client
+        // never has to re-derive it (and never shows a second, different %).
+        $wo = WorkOrder::factory()->create(['produced_qty' => 100]);
+        $reason = ScrapReason::factory()->create();
+        ScrapEntry::factory()->create(['work_order_id' => $wo->id, 'scrap_reason_id' => $reason->id, 'quantity' => 25]);
+
+        $response = $this->asOperator()->getJson("/api/v1/work-orders/{$wo->id}/scrap-entries");
+
+        $response->assertOk()
+            ->assertJsonPath('meta.quality_facts.basis', 'declared')
+            ->assertJsonPath('meta.quality_facts.good_qty', 75)
+            ->assertJsonPath('meta.quality_facts.scrap_qty', 25)
+            ->assertJsonPath('meta.quality_facts.scrap_entries_qty', 25)
+            ->assertJsonPath('meta.quality_facts.scrapped_units_qty', 0)
+            ->assertJsonPath('meta.quality_facts.total_qty', 100)
+            ->assertJsonPath('meta.quality_facts.quality_pct', 75);
+    }
+
     // ── Reports ──────────────────────────────────────────────────────────────
 
     public function test_scrap_pareto_returns_reasons_sorted_by_quantity(): void

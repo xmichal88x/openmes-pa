@@ -13,6 +13,7 @@ use App\Models\WorkOrder;
 use App\Models\Workstation;
 use App\Services\Machine\MachineCommandService;
 use App\Services\Production\OperatorWorkstationSelection;
+use App\Services\Quality\QualityFacts;
 use App\Services\WorkOrder\WorkOrderService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -412,6 +413,12 @@ class WorkOrderController extends Controller
 
         $workOrder->scrapEntries->each(fn ($entry) => $entry->setAttribute('can_classify', $request->user()->can('update', $entry)));
 
+        // Quality with the numbers behind it (P2.7). The page never derives the
+        // ratio itself: the basis depends on the evidence this order carries, so
+        // `QualityFacts` is the only place allowed to decide it. The scrap
+        // entries come from the relation already loaded above.
+        $quality = app(QualityFacts::class)->forWorkOrder($workOrder);
+
         // Quantity ledger per step (what arrived, what is still waiting) so the
         // page can show and gate the quick quantity log; the flow mode tells it
         // whether finishing a step needs the ledger to be empty first.
@@ -457,7 +464,7 @@ class WorkOrderController extends Controller
         // was last seen - so the order shows which pieces it is made of, not only counts.
         $serialUnits = $this->serialUnitsOf($workOrder);
 
-        return Inertia::render('operator/WorkOrderDetail', compact('hooks', 'workOrder', 'issueTypes', 'scrapReasons', 'workstations', 'defaultWorkstationId', 'line', 'labelTemplates', 'processPhotos', 'stepPhotos', 'stepMedia', 'stepChecklists', 'stepOutputs', 'issueCustomFields', 'engineeringDocuments', 'materialShortages', 'flowMode', 'selectedWorkstation', 'serialUnits', 'machineCommandCaps'));
+        return Inertia::render('operator/WorkOrderDetail', compact('hooks', 'workOrder', 'issueTypes', 'scrapReasons', 'workstations', 'defaultWorkstationId', 'line', 'labelTemplates', 'processPhotos', 'stepPhotos', 'stepMedia', 'stepChecklists', 'stepOutputs', 'issueCustomFields', 'engineeringDocuments', 'materialShortages', 'flowMode', 'selectedWorkstation', 'serialUnits', 'machineCommandCaps', 'quality'));
     }
 
     /**

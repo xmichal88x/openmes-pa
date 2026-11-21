@@ -54,6 +54,13 @@ class ScrapEntryController extends Controller
 
     /**
      * List scrap entries for a single work order, with the work order totals.
+     *
+     * `quality_facts` is the breakdown behind `quality_pct` (P2.7): which basis
+     * the ratio rests on (`units` = packed units, `declared` = stated quantity),
+     * the good quantity, the reported scrap, the scrapped units and the total.
+     * The two older fields keep their meaning: `total_scrap_qty` counts the
+     * reported entries only, while `quality_facts.scrap_qty` also counts
+     * scrapped units - the numerator quality actually uses.
      */
     public function forWorkOrder(WorkOrder $workOrder): JsonResponse
     {
@@ -64,12 +71,15 @@ class ScrapEntryController extends Controller
             ->orderByDesc('reported_at')
             ->get();
 
+        $qualityFacts = app(\App\Services\Quality\QualityFacts::class)->forWorkOrder($workOrder);
+
         return response()->json([
             'data' => $entries,
             'meta' => [
                 'work_order_id' => $workOrder->id,
-                'total_scrap_qty' => $workOrder->totalScrapQty(),
-                'quality_pct' => $workOrder->qualityPct(),
+                'total_scrap_qty' => $qualityFacts['scrap_entries_qty'],
+                'quality_pct' => $qualityFacts['quality_pct'],
+                'quality_facts' => $qualityFacts,
             ],
         ]);
     }

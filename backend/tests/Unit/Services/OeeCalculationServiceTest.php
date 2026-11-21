@@ -3,12 +3,16 @@
 namespace Tests\Unit\Services;
 
 use App\Enums\DowntimeKind;
+use App\Models\Batch;
 use App\Models\DowntimeReason;
 use App\Models\Line;
 use App\Models\ProductionDowntime;
+use App\Models\SerialUnit;
+use App\Models\WorkOrder;
 use App\Services\Production\OeeCalculationService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
 class OeeCalculationServiceTest extends TestCase
@@ -138,6 +142,99 @@ class OeeCalculationServiceTest extends TestCase
             ->getPlannedMinutes($this->line->id, $this->date);
 
         $this->assertSame(100, $planned);
+    }
+
+    /**
+     * A done batch inside the OEE day, on this test's line.
+     */
+    private function batchOnLine(float $produced, float $scrap, ?string $source): Batch
+    {
+        $workOrder = WorkOrder::factory()->create(['line_id' => $this->line->id]);
+        $batch = Batch::factory()->create([
+            'work_order_id' => $workOrder->id,
+            'status' => Batch::STATUS_DONE,
+            'target_qty' => $produced,
+            'produced_qty' => $produced,
+            'scrap_qty' => $scrap,
+            'started_at' => $this->date->copy()->setTime(8, 0),
+            'completed_at' => $this->date->copy()->setTime(12, 0),
+        ]);
+
+        if ($source !== null) {
+            $batch->setProducedQtySource($source);
+            $batch->save();
+        }
+
+        return $batch;
+    }
+
+    private function packedUnit(Batch $batch, ?string $status = SerialUnit::STATUS_COMPLETED): SerialUnit
+    {
+        return SerialUnit::factory()->create([
+            'work_order_id' => $batch->work_order_id,
+            'batch_id' => $batch->id,
+            'status' => $status,
+            'packed_at' => now(),
+        ]);
+    }
+
+    /**
+     * `produced_qty` on a unit-flow batch is already the good units, so the old
+     * `(total - scrap) / total` subtracted the loss twice: 3 packed with 1 scrap
+     * read 66.67% instead of 75%. P2.7 (QualityFacts) reads the evidence.
+     */
+    public function test_quality_reads_packed_units_instead_of_produced_minus_scrap(): void
+    {
+        $batch = $this->batchOnLine(3, 1, Batch::PRODUCED_QTY_SOURCE_UNITS);
+
+        foreach (range(1, 3) as $_) {
+            $this->packedUnit($batch);
+        }
+
+        $record = $this->service->calculateForDate($this->line, $this->date);
+
+        $this->assertNotNull($record);
+        $this->assertSame(75.0, (float) $record->quality_pct);
+        $this->assertEqualsWithDelta(3.0, (float) $record->good_produced, 0.01);
+        $this->assertEqualsWithDelta(1.0, (float) $record->scrap_qty, 0.01);
+        // The ratio's own denominator (good + scrap), so the record reconciles.
+        $this->assertEqualsWithDelta(4.0, (float) $record->total_produced, 0.01);
+    }
+
+    public function test_quality_of_a_declared_batch_is_the_same_as_before(): void
+    {
+        // Parity check: 100 produced, 25 reported scrap - 75% both before and after.
+        $this->batchOnLine(100, 25, Batch::PRODUCED_QTY_SOURCE_MANUAL);
+
+        $record = $this->service->calculateForDate($this->line, $this->date);
+
+        $this->assertNotNull($record);
+        $this->assertSame(75.0, (float) $record->quality_pct);
+        $this->assertEqualsWithDelta(75.0, (float) $record->good_produced, 0.01);
+        $this->assertEqualsWithDelta(100.0, (float) $record->total_produced, 0.01);
+    }
+
+    public function test_a_batch_without_a_source_makes_quality_unknown_instead_of_throwing(): void
+    {
+        // One batch states its figure, the other never says what it means. Adding
+        // them up would quietly shrink the denominator, so nothing is guessed.
+        $this->batchOnLine(100, 0, Batch::PRODUCED_QTY_SOURCE_MANUAL);
+        $this->batchOnLine(50, 0, null);
+
+        Log::spy();
+
+        $record = $this->service->calculateForDate($this->line, $this->date);
+
+        $this->assertNotNull($record);
+        $this->assertNull($record->quality_pct, 'no basis: null, not a mix of known and unknown');
+        $this->assertNull($record->oee_pct);
+        $this->assertNull($record->good_produced, 'good quantity is unknown, not zero');
+        $this->assertEqualsWithDelta(150.0, (float) $record->total_produced, 0.01, 'the recorded production is still reported');
+
+        Log::shouldHaveReceived('warning')
+            ->withArgs(fn (string $message, array $context = []) => str_contains($message, 'quality_basis_unknown')
+                && ($context['unknown_source_batches'] ?? null) === 1)
+            ->atLeast()->once();
     }
 
     public function test_get_by_reason_returns_kind_metadata(): void

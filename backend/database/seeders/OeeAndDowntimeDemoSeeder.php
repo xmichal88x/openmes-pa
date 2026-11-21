@@ -126,7 +126,7 @@ class OeeAndDowntimeDemoSeeder extends Seeder
                     $started = $date->setTime($startHour, random_int(0, 59));
                     $completed = $started->addMinutes(random_int(120, 220));
 
-                    Batch::create([
+                    $batch = new Batch([
                         'work_order_id' => $workOrder->id,
                         'batch_number' => (Batch::where('work_order_id', $workOrder->id)->max('batch_number') ?? 0) + 1,
                         'status' => Batch::STATUS_DONE,
@@ -136,6 +136,11 @@ class OeeAndDowntimeDemoSeeder extends Seeder
                         'started_at' => $started,
                         'completed_at' => $completed,
                     ]);
+                    // The demo states its figure, so it declares it. Without this
+                    // the batch would claim `produced_qty_source=unknown` and the
+                    // OEE quality would (correctly) be N/A instead of a number.
+                    $batch->setProducedQtySource(Batch::PRODUCED_QTY_SOURCE_MANUAL);
+                    $batch->save();
                 }
 
                 // One unplanned downtime so availability isn't a flat 100%.

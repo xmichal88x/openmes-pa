@@ -630,7 +630,7 @@ class ShiftMonitorDemoSeeder extends Seeder
             $target = max(1, (int) round($ratePerHour * $slice / 60));
             $produced = (int) round($ratePerHour * $ranMinutes / 60 * (mt_rand(78, 96) / 100));
 
-            Batch::create([
+            $batch = new Batch([
                 'work_order_id' => $workOrder->id,
                 'workstation_id' => $workstation->id,
                 // Stations on the same line draw from the same work orders, and
@@ -652,6 +652,10 @@ class ShiftMonitorDemoSeeder extends Seeder
                 'started_at' => $from,
                 'completed_at' => $to,
             ]);
+            // Demo data states its figure, so it declares it. Without a source a
+            // closed batch makes OEE quality (correctly) N/A instead of a number.
+            $batch->setProducedQtySource(Batch::PRODUCED_QTY_SOURCE_MANUAL);
+            $batch->save();
         }
     }
 

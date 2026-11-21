@@ -793,21 +793,18 @@ class WorkOrder extends Model
     }
 
     /**
-     * Quality metric for this work order: the share of produced units that
-     * were not scrapped, as a percentage. Scrap entries automatically pull
-     * this down. Returns null when nothing has been produced yet.
+     * Quality metric for this work order: the share of what was made that was
+     * good, as a percentage - or null when there is no basis (nothing produced,
+     * or a batch whose quantity has no declared source).
+     *
+     * The arithmetic lives in one place only: {@see \App\Services\Quality\QualityFacts}.
+     * It picks the basis from the evidence (packed units vs a declared
+     * quantity), so this order can never disagree with the operator screen, the
+     * scrap API or OEE.
      */
     public function qualityPct(): ?float
     {
-        $produced = (float) $this->produced_qty;
-
-        if ($produced <= 0) {
-            return null;
-        }
-
-        $good = max(0.0, $produced - $this->totalScrapQty());
-
-        return round(($good / $produced) * 100, 2);
+        return app(\App\Services\Quality\QualityFacts::class)->forWorkOrder($this)['quality_pct'];
     }
 
     /**

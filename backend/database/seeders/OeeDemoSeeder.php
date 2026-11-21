@@ -78,7 +78,7 @@ class OeeDemoSeeder extends Seeder
                             $started = $this->randomTimeWithinShift($date, $shift);
                             $completed = $started->copy()->addMinutes(random_int(45, 180));
 
-                            Batch::create([
+                            $batch = new Batch([
                                 'work_order_id' => $workOrder->id,
                                 'batch_number' => (Batch::where('work_order_id', $workOrder->id)->max('batch_number') ?? 0) + 1,
                                 'status' => Batch::STATUS_DONE,
@@ -88,6 +88,11 @@ class OeeDemoSeeder extends Seeder
                                 'started_at' => $started,
                                 'completed_at' => $completed,
                             ]);
+                            // Demo data states its figure, so it declares it -
+                            // otherwise the batch would claim an unknown source
+                            // and OEE quality would (correctly) be N/A.
+                            $batch->setProducedQtySource(Batch::PRODUCED_QTY_SOURCE_MANUAL);
+                            $batch->save();
                         }
                     }
                 }
