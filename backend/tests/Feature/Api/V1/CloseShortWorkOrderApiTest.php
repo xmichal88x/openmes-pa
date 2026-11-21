@@ -79,13 +79,15 @@ class CloseShortWorkOrderApiTest extends TestCase
         app(BatchService::class)->startStep($production, $this->operator);
         app(BatchService::class)->completeStep($production->fresh(), $this->operator);
 
-        // Only one of the two pieces made it into a carton.
+        // Only one of the two pieces made it into a carton: a packed unit is a
+        // good unit (P2.12), an unpacked one would not count at all.
         SerialUnit::create([
             'serial_no' => 'SN-1',
             'psn' => 'SN-1',
             'work_order_id' => $this->workOrder->id,
             'batch_id' => $this->batch->id,
             'status' => SerialUnit::STATUS_COMPLETED,
+            'packed_at' => now(),
         ]);
     }
 

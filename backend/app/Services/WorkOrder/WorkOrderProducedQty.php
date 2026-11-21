@@ -3,8 +3,8 @@
 namespace App\Services\WorkOrder;
 
 use App\Models\Batch;
-use App\Models\SerialUnit;
 use App\Models\WorkOrder;
+use App\Services\Packaging\PackedUnitQty;
 use App\Support\ProductionFlow;
 
 /**
@@ -15,7 +15,8 @@ use App\Support\ProductionFlow;
  *
  * | batch source | contribution                                                          |
  * |--------------|-----------------------------------------------------------------------|
- * | units        | the units the MES counts now, so scrap and re-cuts change it           |
+ * | units        | the packed units the MES counts now (`PackedUnitQty`), so scrap and    |
+ * |              | re-cuts change it                                                      |
  * | manual       | the figure a human stated (packing correction)                        |
  * | machine      | the figure the machine counter wrote                                  |
  * | unknown      | nothing: a closed batch raises `produced_qty_source_unknown`;        |
@@ -102,37 +103,10 @@ class WorkOrderProducedQty
             // batch keeps the figure the counter wrote.
             return $batch->workOrder?->isMachineCounted()
                 ? (float) $batch->produced_qty
-                : $this->unitsQty($batch);
+                : app(PackedUnitQty::class)->forBatch($batch);
         }
 
         // manual / machine: a declared figure, deterministic and auditable.
         return (float) $batch->produced_qty;
-    }
-
-    /**
-     * The units that left the line on this batch. Mirrors the packing gate: units
-     * carrying no batch count only when the order has a single batch, so they
-     * cannot be credited to the wrong one (I15).
-     */
-    private function unitsQty(Batch $batch): float
-    {
-        $statuses = [SerialUnit::STATUS_COMPLETED, SerialUnit::STATUS_SHIPPED];
-
-        $counted = (float) SerialUnit::query()
-            ->where('batch_id', $batch->id)
-            ->whereIn('status', $statuses)
-            ->count();
-
-        $workOrder = $batch->workOrder;
-
-        if ($workOrder && $workOrder->batches()->count() === 1) {
-            $counted += (float) SerialUnit::query()
-                ->where('work_order_id', $workOrder->id)
-                ->whereNull('batch_id')
-                ->whereIn('status', $statuses)
-                ->count();
-        }
-
-        return $counted;
     }
 }

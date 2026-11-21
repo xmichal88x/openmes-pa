@@ -66,6 +66,7 @@ class PackingQtySourceTest extends TestCase
         return [$wo->fresh(), $batch->fresh(), $step->fresh()];
     }
 
+    /** A unit that went through packing - the only kind that is a good unit (P2.12). */
     private function unit(WorkOrder $wo, Batch $batch, string $no): SerialUnit
     {
         return SerialUnit::create([
@@ -74,6 +75,7 @@ class PackingQtySourceTest extends TestCase
             'work_order_id' => $wo->id,
             'batch_id' => $batch->id,
             'status' => SerialUnit::STATUS_COMPLETED,
+            'packed_at' => now(),
         ]);
     }
 

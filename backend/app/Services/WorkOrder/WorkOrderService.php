@@ -6,10 +6,10 @@ use App\Models\AuditLog;
 use App\Models\Batch;
 use App\Models\BatchStep;
 use App\Models\ProcessTemplate;
-use App\Models\SerialUnit;
 use App\Models\TemplateStep;
 use App\Models\User;
 use App\Models\WorkOrder;
+use App\Services\Packaging\PackedUnitQty;
 use App\Support\ProductionFlow;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Facades\DB;
@@ -914,11 +914,14 @@ class WorkOrderService
                         $step = app(BatchService::class)->startStep($step->fresh(), $user);
                     }
 
-                    // With packed units the MES derives the figure itself, so the
-                    // batch is marked `units` and a later scrap still re-derives
-                    // it. Only a batch without any unit needs the supervisor's own
-                    // count (marked `manual`, audited by the packing gate).
-                    $packed = $this->packedUnitsQty($workOrder, $batch);
+                    // The figure is the packed units (`PackedUnitQty`), never
+                    // every `completed` row - a component is not a good unit
+                    // (P2.12). With such units the MES derives the figure itself,
+                    // so the batch is marked `units` and a later scrap still
+                    // re-derives it; only a batch without any unit needs the
+                    // supervisor's own count (marked `manual`, audited by the
+                    // packing gate).
+                    $packed = app(PackedUnitQty::class)->forBatch($batch);
 
                     app(BatchService::class)->completeStep($step->fresh(), $user,
                         $packed > 0 ? [] : ['produced_qty' => $packed]);
@@ -958,31 +961,6 @@ class WorkOrderService
 
             return $workOrder->fresh(['line', 'productType', 'shortClosedBy']);
         });
-    }
-
-    /**
-     * The quantity a batch's packing closes on: the units that actually left the
-     * line. Units carrying no batch are counted only when the order has exactly
-     * one batch - otherwise they could belong to any of them.
-     */
-    private function packedUnitsQty(WorkOrder $workOrder, Batch $batch): float
-    {
-        $statuses = [SerialUnit::STATUS_COMPLETED, SerialUnit::STATUS_SHIPPED];
-
-        $produced = (float) SerialUnit::query()
-            ->where('batch_id', $batch->id)
-            ->whereIn('status', $statuses)
-            ->count();
-
-        if ($workOrder->batches()->count() === 1) {
-            $produced += (float) SerialUnit::query()
-                ->where('work_order_id', $workOrder->id)
-                ->whereNull('batch_id')
-                ->whereIn('status', $statuses)
-                ->count();
-        }
-
-        return $produced;
     }
 
     /**

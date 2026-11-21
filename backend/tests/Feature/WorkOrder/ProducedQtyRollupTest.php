@@ -81,6 +81,11 @@ class ProducedQtyRollupTest extends TestCase
         return $batch->fresh();
     }
 
+    /**
+     * A unit that went through packing: `UnitPackingService::packUnit()` sets
+     * `packed_at` when it completes a unit, and only a packed unit is a good unit
+     * (P2.12). A `blocked`/`scrapped` unit keeps the stamp but leaves the count.
+     */
     private function unit(WorkOrder $workOrder, Batch $batch, string $no, string $status = SerialUnit::STATUS_COMPLETED): SerialUnit
     {
         return SerialUnit::create([
@@ -89,6 +94,7 @@ class ProducedQtyRollupTest extends TestCase
             'work_order_id' => $workOrder->id,
             'batch_id' => $batch->id,
             'status' => $status,
+            'packed_at' => in_array($status, [SerialUnit::STATUS_COMPLETED, SerialUnit::STATUS_SHIPPED], true) ? now() : null,
         ]);
     }
 

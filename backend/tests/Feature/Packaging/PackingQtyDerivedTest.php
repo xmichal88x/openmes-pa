@@ -63,7 +63,11 @@ class PackingQtyDerivedTest extends TestCase
         return [$wo->fresh(), $batch->fresh(), $step->fresh()];
     }
 
-    /** A unit that left production (or the dock) on a batch. */
+    /**
+     * A unit that left production (or the dock) through packing: `packed_at` is
+     * what makes it a good unit (P2.12), so the fixture sets it the way
+     * `UnitPackingService::packUnit()` does.
+     */
     private function unit(WorkOrder $wo, ?Batch $batch, string $no, string $status = SerialUnit::STATUS_COMPLETED): SerialUnit
     {
         return SerialUnit::create([
@@ -72,6 +76,7 @@ class PackingQtyDerivedTest extends TestCase
             'work_order_id' => $wo->id,
             'batch_id' => $batch?->id,
             'status' => $status,
+            'packed_at' => in_array($status, [SerialUnit::STATUS_COMPLETED, SerialUnit::STATUS_SHIPPED], true) ? now() : null,
         ]);
     }
 

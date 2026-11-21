@@ -16,6 +16,7 @@ use App\Models\User;
 use App\Models\WorkOrder;
 use App\Models\Workstation;
 use App\Services\Material\MaterialAllocationService;
+use App\Services\Packaging\PackedUnitQty;
 use App\Services\Quality\QualityTriggerService;
 use App\Support\ProductionFlow;
 use Illuminate\Support\Facades\DB;
@@ -481,20 +482,21 @@ class BatchService
                 $given = array_key_exists('produced_qty', $data) && $data['produced_qty'] !== null
                     ? (float) $data['produced_qty']
                     : null;
-                $unitStatuses = [SerialUnit::STATUS_COMPLETED, SerialUnit::STATUS_SHIPPED];
+                // The quantity is the packed units and nothing else (`PackedUnitQty`):
+                // a component such as a sub-assembly is `completed` without ever
+                // being packed, so it is not a good unit of this batch.
+                $derived = app(PackedUnitQty::class)->forBatch($step->batch);
 
-                $derived = (float) SerialUnit::query()
-                    ->where('batch_id', $step->batch_id)
-                    ->whereIn('status', $unitStatuses)
-                    ->count();
+                // A different question from the quantity: is there any unit record
+                // at all? It decides whether the operator's count is the only evidence.
                 $anyUnits = SerialUnit::query()->where('batch_id', $step->batch_id)->exists();
 
-                // Units packed before they were attributed to a batch are added
-                // only when the order cannot confuse them with another batch (I15).
+                // Units packed before they were attributed to a batch count for the
+                // order only when it cannot confuse them with another batch (I15).
                 $loose = SerialUnit::query()
                     ->where('work_order_id', $packingOrder->id)
                     ->whereNull('batch_id')
-                    ->whereIn('status', $unitStatuses)
+                    ->whereIn('status', [SerialUnit::STATUS_COMPLETED, SerialUnit::STATUS_SHIPPED])
                     ->count();
                 $batchCount = null;
                 if ($loose > 0) {
@@ -506,7 +508,6 @@ class BatchService
                         ));
                     }
                     if ($batchCount === 1) {
-                        $derived += $loose;
                         $anyUnits = $anyUnits || SerialUnit::query()->where('work_order_id', $packingOrder->id)->exists();
                     }
                 }
