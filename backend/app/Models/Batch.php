@@ -39,6 +39,34 @@ class Batch extends Model
 
     const RELEASE_FOR_SALE = 'for_sale';
 
+    /**
+     * Explicit provenance of a batch's produced quantity (RQ-PA-263). Without it
+     * the number cannot be read: production without serialisation is legal, a
+     * missing unit record is not. Kept in `extra_data`, so no migration.
+     */
+    const PRODUCED_QTY_SOURCE_UNITS = 'units';
+
+    const PRODUCED_QTY_SOURCE_MANUAL = 'manual';
+
+    const PRODUCED_QTY_SOURCE_MACHINE = 'machine';
+
+    const PRODUCED_QTY_SOURCE_UNKNOWN = 'unknown';
+
+    /** @var array<int, string> */
+    const PRODUCED_QTY_SOURCES = [
+        self::PRODUCED_QTY_SOURCE_UNITS,
+        self::PRODUCED_QTY_SOURCE_MANUAL,
+        self::PRODUCED_QTY_SOURCE_MACHINE,
+        self::PRODUCED_QTY_SOURCE_UNKNOWN,
+    ];
+
+    /**
+     * The batch's produced-quantity provenance rides along in every serialisation
+     * (API, exports, operator screens): a consumer must be able to see that a
+     * figure is `unknown` instead of trusting it.
+     */
+    protected $appends = ['produced_qty_source'];
+
     protected $fillable = [
         'work_order_id',
         // Which work-order configuration version generated this batch (#182), so
@@ -271,6 +299,45 @@ class Batch extends Model
     public function canRelease(): bool
     {
         return $this->status === self::STATUS_DONE && ! $this->isReleased();
+    }
+
+    /**
+     * Where this batch's produced quantity came from (RQ-PA-263). A missing or
+     * unrecognised value reads as `unknown` — the caller decides what that
+     * means; this never guesses a source and never throws.
+     */
+    public function producedQtySource(): string
+    {
+        $source = $this->extra_data['produced_qty_source'] ?? null;
+
+        return is_string($source) && in_array($source, self::PRODUCED_QTY_SOURCES, true)
+            ? $source
+            : self::PRODUCED_QTY_SOURCE_UNKNOWN;
+    }
+
+    /**
+     * Mark where the produced quantity comes from. Merges into `extra_data`, so
+     * the re-cut path's `idempotency_key` / `reason` survive (no key is dropped).
+     * Only the attribute is set — callers persist it in the same update as
+     * `produced_qty`, so the number and its provenance can never disagree.
+     *
+     * @throws \InvalidArgumentException on a source outside PRODUCED_QTY_SOURCES
+     */
+    public function setProducedQtySource(string $source): void
+    {
+        if (! in_array($source, self::PRODUCED_QTY_SOURCES, true)) {
+            throw new \InvalidArgumentException("invalid produced_qty_source: {$source}");
+        }
+
+        $this->extra_data = array_merge($this->extra_data ?? [], [
+            'produced_qty_source' => $source,
+        ]);
+    }
+
+    /** `produced_qty_source` as an appended attribute (see $appends). */
+    public function getProducedQtySourceAttribute(): string
+    {
+        return $this->producedQtySource();
     }
 
     /**

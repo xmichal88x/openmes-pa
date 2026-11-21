@@ -27,7 +27,7 @@ class RecutBatchesRequest extends FormRequest
         return [
             'target_qty' => ['required', 'numeric', 'min:0.01'],
             'replaces_batch_id' => [
-                'nullable',
+                'required',
                 'integer',
                 Rule::exists('batches', 'id')->where(
                     fn ($query) => $query
@@ -37,6 +37,17 @@ class RecutBatchesRequest extends FormRequest
             ],
             'reason' => ['required', 'string', 'max:500'],
             'idempotency_key' => ['required', 'string', 'max:100'],
+        ];
+    }
+
+    /**
+     * A replacement without the batch it replaces is the RC-32 defect itself:
+     * nothing then links the new batch to a scrapped original.
+     */
+    public function messages(): array
+    {
+        return [
+            'replaces_batch_id.required' => __('recut_replaces_batch_required: a replacement batch must name the batch it replaces (replaces_batch_id).'),
         ];
     }
 }

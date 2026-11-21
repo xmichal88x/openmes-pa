@@ -179,7 +179,8 @@ class PackingQtyDerivedTest extends TestCase
         $this->assertSame('no_units', $audit->after_state['reason']);
     }
 
-    public function test_a_production_step_still_closes_on_the_plan(): void
+    /** An order whose only routing step is a production step (no packing). */
+    private function productionStep(int $targetQty = 3): array
     {
         $product = ProductType::factory()->create();
         $template = ProcessTemplate::factory()->create(['product_type_id' => $product->id]);
@@ -187,17 +188,48 @@ class PackingQtyDerivedTest extends TestCase
         $wo = WorkOrder::factory()->create([
             'product_type_id' => $product->id,
             'process_snapshot' => $template->fresh()->toSnapshot(),
-            'planned_qty' => 3,
+            'planned_qty' => $targetQty,
             'status' => WorkOrder::STATUS_IN_PROGRESS,
         ]);
-        $batch = app(WorkOrderService::class)->createBatch($wo, 3);
+        $batch = app(WorkOrderService::class)->createBatch($wo, $targetQty);
         $step = $batch->steps()->where('step_number', 1)->firstOrFail();
         app(BatchService::class)->startStep($step, $this->operator);
 
-        $done = app(BatchService::class)->completeStep($step, $this->operator);
+        return [$wo->fresh(), $batch->fresh(), $step->fresh()];
+    }
+
+    /**
+     * RQ-PA-263: the plan is not a production count. A production step that
+     * closes without anyone stating a quantity has no source, so the rollup
+     * refuses it instead of writing the plan off as produced.
+     */
+    public function test_a_production_step_without_a_stated_quantity_is_refused(): void
+    {
+        [$wo, $batch, $step] = $this->productionStep(3);
+
+        try {
+            app(BatchService::class)->completeStep($step, $this->operator);
+            $this->fail('A batch with no declared source must not be rolled up.');
+        } catch (\DomainException $e) {
+            $this->assertStringContainsString('produced_qty_source_unknown', $e->getMessage());
+        }
+
+        $this->assertSame(BatchStep::STATUS_IN_PROGRESS, $step->fresh()->status);
+        $this->assertSame(0.0, (float) $batch->fresh()->produced_qty);
+        $this->assertSame(Batch::PRODUCED_QTY_SOURCE_UNKNOWN, $batch->fresh()->producedQtySource());
+    }
+
+    public function test_a_production_step_closes_on_a_stated_quantity(): void
+    {
+        [$wo, $batch, $step] = $this->productionStep(3);
+
+        $done = app(BatchService::class)->completeStep($step, $this->operator, ['produced_qty' => 3]);
 
         $this->assertSame(3.0, (float) $done->passed_qty);
         $this->assertSame(3.0, (float) $batch->fresh()->produced_qty);
+        // A human stated the figure, so it is manual - never a plan default.
+        $this->assertSame(Batch::PRODUCED_QTY_SOURCE_MANUAL, $batch->fresh()->producedQtySource());
+        $this->assertSame(3.0, (float) $wo->fresh()->produced_qty);
     }
 
     /** A replacement batch cut against the given one, as BatchController::recut builds it. */

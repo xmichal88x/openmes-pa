@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Models\Concerns\HasCustomFields;
 use App\Models\Concerns\HasTenant;
 use App\Models\Concerns\SoftDeletesWithAudit;
+use App\Support\ProductionFlow;
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -130,6 +131,20 @@ class WorkOrder extends Model
     const COUNTING_SOURCES = [self::COUNTING_OPERATOR, self::COUNTING_MACHINE, self::COUNTING_BOTH];
 
     /**
+     * Where the order's produced quantity comes from (RQ-PA-263). Read-only and
+     * additive: the three real sources are the batches' own
+     * `Batch::PRODUCED_QTY_SOURCE_*` values, plus two order-level readings that
+     * no single batch can carry.
+     */
+    const PRODUCED_QTY_SOURCE_MIXED = 'mixed';
+
+    /**
+     * Transfer flow: the number is what left each batch's last step (the step
+     * ledger), not a unit count and not a human statement.
+     */
+    const PRODUCED_QTY_SOURCE_STEPS = 'steps';
+
+    /**
      * The columns that say WHERE and WHEN the order is scheduled. A write that
      * touches any of them is a schedule change, wherever it came from — the
      * planner, the admin edit form or an ERP import — which is what
@@ -175,6 +190,13 @@ class WorkOrder extends Model
         self::STATUS_REJECTED,
         self::STATUS_CANCELLED,
     ];
+
+    /**
+     * `produced_qty_source` is appended so every consumer (API, exports, screens)
+     * can see whether the figure is derived, stated, counted by the machine or
+     * simply unknown — never discoverable by guessing.
+     */
+    protected $appends = ['produced_qty_source'];
 
     protected $fillable = [
         'order_no',
@@ -484,6 +506,50 @@ class WorkOrder extends Model
     }
 
     /**
+     * Where this order's produced quantity comes from (RQ-PA-263). Never throws:
+     * a reader shows the stored figure together with this label, while a writer
+     * (`WorkOrderProducedQty`) refuses to roll up an `unknown` batch.
+     *
+     * - `machine` — counting_source=machine|both: the PLC counter is the source
+     *   (polityka, decyzja 2026-11-21), even when operators may also enter.
+     * - `steps`   — transfer flow: the step ledger carries the figure.
+     * - `units` / `manual` — every batch declares the same source.
+     * - `unknown` — at least one batch has no evidence of its source (or the
+     *   order has no batch yet). Never hidden behind `mixed`.
+     * - `mixed`   — several known sources among the batches.
+     */
+    public function producedQtySource(): string
+    {
+        // Polityka: counting_source=machine|both ⇒ licznik PLC (decyzja 2026-11-21).
+        if ($this->isMachineCounted()) {
+            return Batch::PRODUCED_QTY_SOURCE_MACHINE;
+        }
+
+        // Polityka transferu: liczbę niesie ledger kroków, nie deklaracja batcha.
+        if (ProductionFlow::isTransfer()) {
+            return self::PRODUCED_QTY_SOURCE_STEPS;
+        }
+
+        $sources = $this->relationLoaded('batches')
+            ? $this->batches->where('status', '!=', Batch::STATUS_CANCELLED)
+            : $this->batches()->where('status', '!=', Batch::STATUS_CANCELLED)->get();
+
+        $known = $sources->map(fn (Batch $batch) => $batch->producedQtySource())->unique()->values();
+
+        if ($known->isEmpty() || $known->contains(Batch::PRODUCED_QTY_SOURCE_UNKNOWN)) {
+            return Batch::PRODUCED_QTY_SOURCE_UNKNOWN;
+        }
+
+        return $known->count() === 1 ? (string) $known->first() : self::PRODUCED_QTY_SOURCE_MIXED;
+    }
+
+    /** `produced_qty_source` as an appended attribute (see $appends). */
+    public function getProducedQtySourceAttribute(): string
+    {
+        return $this->producedQtySource();
+    }
+
+    /**
      * Whether operators may manually enter produced quantities for this order
      * (counting_source is operator or both). Machine-only orders block manual
      * entry so the machine stays the single source of truth.
@@ -497,7 +563,7 @@ class WorkOrder extends Model
     /** Routed transfer orders derive output from their batch steps. */
     public function usesStepLedger(): bool
     {
-        if (! \App\Support\ProductionFlow::isTransfer()) {
+        if (! ProductionFlow::isTransfer()) {
             return false;
         }
 

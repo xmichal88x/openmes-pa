@@ -31,6 +31,7 @@ class BatchService
         protected MaterialAllocationService $allocationService,
         protected QualityTriggerService $qualityTriggerService,
         protected StartPreflightService $startPreflight,
+        protected WorkOrderProducedQty $producedQty,
     ) {}
 
     /**
@@ -559,6 +560,16 @@ class BatchService
 
                 // The batch records what was packed, never the plan.
                 $data['produced_qty'] = $packedQty = $produced;
+
+                // Provenance, written in the same transaction as the quantity:
+                // with no stated quantity the figure is the units the MES
+                // counted, otherwise it is the operator's own count.
+                $step->batch->setProducedQtySource(
+                    $given === null
+                        ? Batch::PRODUCED_QTY_SOURCE_UNITS
+                        : Batch::PRODUCED_QTY_SOURCE_MANUAL,
+                );
+                $step->batch->update(['extra_data' => $step->batch->extra_data]);
             }
 
             // Whole-batch flow: finishing a step passes along whatever was not
@@ -697,11 +708,19 @@ class BatchService
             $beforeStatus = $workOrder->status;
 
             $step->update(['passed_qty' => $produced]);
-            $batch->update(['produced_qty' => $produced]);
+            // A supervisor stated the packed quantity: a human is the source now.
+            // The marker rides along in the same UPDATE as the quantity.
+            $batch->setProducedQtySource(Batch::PRODUCED_QTY_SOURCE_MANUAL);
+            $batch->update([
+                'produced_qty' => $produced,
+                'extra_data' => $batch->extra_data,
+            ]);
 
-            $producedTotal = (float) $batch->workOrder->batches()
-                ->where('status', Batch::STATUS_DONE)
-                ->sum('produced_qty');
+            // One formula for every write path: the order produced what its
+            // batches produced, each read from its declared source.
+            //
+            // @throws \DomainException produced_qty_source_unknown
+            $producedTotal = $this->producedQty->recompute($workOrder->fresh());
             $workOrder->update(['produced_qty' => $producedTotal]);
 
             if ($workOrder->isShortClosed()) {
@@ -1066,6 +1085,18 @@ class BatchService
             $producedQty = ProductionFlow::isTransfer()
                 ? (float) ($batch->lastEffectiveStep()?->passed_qty ?? 0)
                 : ($data['produced_qty'] ?? $batch->target_qty);
+
+            // A batch that closes on a quantity its caller stated is `manual` -
+            // that is where its number came from. A batch that closes on the plan
+            // without anyone stating a quantity keeps `unknown`, and the rollup
+            // refuses it (RQ-PA-263): the plan is not a production count.
+            if (! ProductionFlow::isTransfer()
+                && $batch->producedQtySource() === Batch::PRODUCED_QTY_SOURCE_UNKNOWN
+                && ($data['produced_qty'] ?? null) !== null) {
+                $batch->setProducedQtySource(Batch::PRODUCED_QTY_SOURCE_MANUAL);
+                $batch->update(['extra_data' => $batch->extra_data]);
+            }
+
             $this->completeBatch($batch, $producedQty);
             $this->allocationService->consumeForBatch($batch);
 
@@ -1105,6 +1136,12 @@ class BatchService
 
     /**
      * Complete a batch and update produced quantity.
+     *
+     * The batch keeps what it confirmed; the order is rolled up by
+     * `WorkOrderProducedQty` from each batch's declared source, so a batch with
+     * no source blocks the rollup instead of contributing a guess.
+     *
+     * @throws \DomainException `produced_qty_source_unknown`
      */
     protected function completeBatch(Batch $batch, float $producedQty): void
     {
@@ -1121,12 +1158,8 @@ class BatchService
 
         // Update work order produced qty
         $workOrder = $batch->workOrder;
-        $totalProduced = $workOrder->batches()
-            ->where('status', Batch::STATUS_DONE)
-            ->sum('produced_qty');
-
         $workOrder->update([
-            'produced_qty' => $totalProduced,
+            'produced_qty' => $this->producedQty->recompute($workOrder),
         ]);
     }
 
@@ -1134,6 +1167,9 @@ class BatchService
      * Transfer flow: a batch has produced whatever left its last step so far,
      * and the work order the sum over its live batches — updated as pieces
      * flow, not only when a batch closes.
+     *
+     * The order total is still `WorkOrderProducedQty`'s (transfer policy there),
+     * so all four call sites share one formula.
      */
     protected function rollUpProducedQty(Batch $batch): void
     {
@@ -1143,9 +1179,7 @@ class BatchService
 
         $workOrder = $batch->workOrder;
         $workOrder->update([
-            'produced_qty' => $workOrder->batches()
-                ->where('status', '!=', Batch::STATUS_CANCELLED)
-                ->sum('produced_qty'),
+            'produced_qty' => $this->producedQty->recompute($workOrder),
         ]);
     }
 

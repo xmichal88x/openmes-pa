@@ -139,7 +139,13 @@ class StepTypedOutputsTest extends TestCase
             'value_number' => 5, 'recorded_by_id' => $this->operator->id, 'recorded_at' => now(),
         ]);
 
-        $service->completeStep($this->batchStep->fresh(), $this->operator);
+        // Polityka danych testowych (RQ-PA-263): this test measures the required
+        // output gate, not the produced quantity, and a production step closing
+        // without a stated figure has no source - so the operator's figure is
+        // stated here instead of letting the batch close on the plan.
+        $service->completeStep($this->batchStep->fresh(), $this->operator, [
+            'produced_qty' => (float) $this->batchStep->batch->target_qty,
+        ]);
         $this->assertSame(BatchStep::STATUS_DONE, $this->batchStep->fresh()->status);
     }
 

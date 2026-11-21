@@ -12,6 +12,7 @@ use App\Models\SerialUnitComponent;
 use App\Models\UnitStepHistory;
 use App\Models\User;
 use App\Models\WorkOrder;
+use App\Services\WorkOrder\UnitProducedQtySync;
 use App\Support\UnitSerialisation;
 use Illuminate\Support\Facades\DB;
 
@@ -22,6 +23,15 @@ use Illuminate\Support\Facades\DB;
  */
 class SerialTraceService
 {
+    /**
+     * What the last unit status change could not re-derive (RQ-PA-263).
+     *
+     * @var array<int, array{code: string, message: string}>
+     */
+    private array $producedQtyWarnings = [];
+
+    public function __construct(private readonly UnitProducedQtySync $producedQty) {}
+
     /**
      * Register a new serialised unit (or return the existing one for the serial).
      */
@@ -501,6 +511,7 @@ class SerialTraceService
                 ]);
             }
             $this->recomputePallet($unit);
+            $this->syncProducedQty($unit, 'scrapped', $operator);
 
             return $unit->fresh();
         });
@@ -530,6 +541,7 @@ class SerialTraceService
                 ]);
             }
             $this->recomputePallet($unit);
+            $this->syncProducedQty($unit, 'recut', $operator);
 
             return $unit->fresh();
         });
@@ -565,6 +577,7 @@ class SerialTraceService
                 'notes' => $note,
             ]);
             $this->recomputePallet($unit);
+            $this->syncProducedQty($unit, 'blocked', $operator);
 
             return $unit->fresh();
         });
@@ -594,9 +607,37 @@ class SerialTraceService
                 'notes' => $note,
             ]);
             $this->recomputePallet($unit);
+            $this->syncProducedQty($unit, 'unblocked', $operator);
 
             return $unit->fresh();
         });
+    }
+
+    /**
+     * What the last unit status change could not re-derive (RQ-PA-263).
+     *
+     * A scrap, a re-cut or a hold is a physical fact and always lands. Where a
+     * quantity is a declared figure, or cannot be rolled up because a finished
+     * batch has no source, the caller is told - the number is never rewritten
+     * quietly. Draining keeps one operation's notice out of the next answer.
+     *
+     * @return array<int, array{code: string, message: string}>
+     */
+    public function takeProducedQtyWarnings(): array
+    {
+        $warnings = $this->producedQtyWarnings;
+        $this->producedQtyWarnings = [];
+
+        return $warnings;
+    }
+
+    /**
+     * Re-derive the unit's batch and its order in this same transaction, so the
+     * physical fact and the numbers that follow from it can never disagree.
+     */
+    private function syncProducedQty(SerialUnit $unit, string $event, User $operator): void
+    {
+        $this->producedQtyWarnings = $this->producedQty->afterStatusChange($unit->fresh(), $event, $operator);
     }
 
     /** A unit's hold changes what the pallet it sits on may do. */

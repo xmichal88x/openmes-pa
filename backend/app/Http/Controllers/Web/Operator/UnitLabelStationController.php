@@ -281,7 +281,7 @@ class UnitLabelStationController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        return response()->json(['unit' => $this->payload($unit), 'message' => __('Unit :sn blocked.', ['sn' => $unit->display_id])]);
+        return $this->unitAnswer($unit, __('Unit :sn blocked.', ['sn' => $unit->display_id]));
     }
 
     /** Release a held unit - supervisors and admins, with the reason. */
@@ -298,7 +298,7 @@ class UnitLabelStationController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        return response()->json(['unit' => $this->payload($unit), 'message' => __('Unit :sn released.', ['sn' => $unit->display_id])]);
+        return $this->unitAnswer($unit, __('Unit :sn released.', ['sn' => $unit->display_id]));
     }
 
     /** Scrap a unit from the station - with a reason, recorded in its history. */
@@ -315,7 +315,7 @@ class UnitLabelStationController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        return response()->json(['unit' => $this->payload($unit), 'message' => __('Unit :sn scrapped.', ['sn' => $unit->display_id])]);
+        return $this->unitAnswer($unit, __('Unit :sn scrapped.', ['sn' => $unit->display_id]));
     }
 
     /** Send a unit whose rework failed to re-cut - scrapped with a `recut` decision. */
@@ -332,7 +332,7 @@ class UnitLabelStationController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        return response()->json(['unit' => $this->payload($unit), 'message' => __('Unit :sn sent to re-cut.', ['sn' => $unit->display_id])]);
+        return $this->unitAnswer($unit, __('Unit :sn sent to re-cut.', ['sn' => $unit->display_id]));
     }
 
     /**
@@ -514,6 +514,22 @@ class UnitLabelStationController extends Controller
             ->map(fn (SerialUnit $u) => $this->payload($u));
 
         return response()->json(['units' => $units]);
+    }
+
+    /**
+     * The bench's answer to a unit status change: the unit, and what the quantity
+     * rollup could not re-derive. The notices ride along in `warnings` and are
+     * also appended to the message, because the station shows the message.
+     */
+    private function unitAnswer(SerialUnit $unit, string $message): JsonResponse
+    {
+        $warnings = $this->serials->takeProducedQtyWarnings();
+
+        return response()->json([
+            'unit' => $this->payload($unit),
+            'message' => $message.($warnings === [] ? '' : ' '.implode(' ', array_column($warnings, 'message'))),
+            'warnings' => $warnings,
+        ]);
     }
 
     private function payload(SerialUnit $unit): array

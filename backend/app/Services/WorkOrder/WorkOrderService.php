@@ -914,18 +914,23 @@ class WorkOrderService
                         $step = app(BatchService::class)->startStep($step->fresh(), $user);
                     }
 
-                    app(BatchService::class)->completeStep($step->fresh(), $user, [
-                        'produced_qty' => $this->packedUnitsQty($workOrder, $batch),
-                    ]);
+                    // With packed units the MES derives the figure itself, so the
+                    // batch is marked `units` and a later scrap still re-derives
+                    // it. Only a batch without any unit needs the supervisor's own
+                    // count (marked `manual`, audited by the packing gate).
+                    $packed = $this->packedUnitsQty($workOrder, $batch);
+
+                    app(BatchService::class)->completeStep($step->fresh(), $user,
+                        $packed > 0 ? [] : ['produced_qty' => $packed]);
                 }
             }
 
-            // Same formula as `BatchService::completeBatch()`: the order produced
-            // what its finished batches produced.
+            // One formula for every write path: the order produced what its
+            // batches produced, each read from its declared source.
+            //
+            // @throws \DomainException produced_qty_source_unknown
             $workOrder->update([
-                'produced_qty' => (float) $workOrder->batches()
-                    ->where('status', Batch::STATUS_DONE)
-                    ->sum('produced_qty'),
+                'produced_qty' => app(WorkOrderProducedQty::class)->recompute($workOrder->fresh()),
             ]);
 
             // Closed by decision, so DONE is stated explicitly - the status rollup

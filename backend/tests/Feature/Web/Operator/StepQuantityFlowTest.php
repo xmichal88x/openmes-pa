@@ -535,7 +535,10 @@ class StepQuantityFlowTest extends TestCase
         $service->startStep($other->steps()->where('step_number', 1)->first(), $this->operator);
         foreach ([1, 2, 3] as $n) {
             $service->startStep($this->step($batch, $n), $this->operator);
-            $service->completeStep($this->step($batch, $n), $this->operator);
+            // The last step closes the batch, so it carries the stated quantity
+            // (RQ-PA-263: a batch without a declared source is not rolled up).
+            $service->completeStep($this->step($batch, $n), $this->operator,
+                $n === 3 ? ['produced_qty' => 10] : []);
         }
 
         $this->assertSame(Batch::STATUS_IN_PROGRESS, $other->fresh()->status);

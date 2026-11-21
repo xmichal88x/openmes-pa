@@ -79,7 +79,10 @@ class SerialUnitController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        return response()->json(['data' => $unit]);
+        return response()->json([
+            'data' => $unit,
+            'warnings' => $this->serials->takeProducedQtyWarnings(),
+        ]);
     }
 
     /** Release a held unit - supervisors and admins. */
@@ -91,7 +94,10 @@ class SerialUnitController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        return response()->json(['data' => $unit]);
+        return response()->json([
+            'data' => $unit,
+            'warnings' => $this->serials->takeProducedQtyWarnings(),
+        ]);
     }
 
     /** Scrap a unit - final, so the reason is mandatory. */
@@ -103,7 +109,11 @@ class SerialUnitController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        return response()->json(['message' => __('Unit :sn scrapped.', ['sn' => $unit->display_id]), 'data' => $unit]);
+        return response()->json([
+            'message' => __('Unit :sn scrapped.', ['sn' => $unit->display_id]),
+            'data' => $unit,
+            'warnings' => $this->serials->takeProducedQtyWarnings(),
+        ]);
     }
 
     public function recut(RecutUnitRequest $request, SerialUnit $serialUnit): JsonResponse
@@ -114,7 +124,11 @@ class SerialUnitController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        return response()->json(['message' => __('Unit :sn sent to re-cut.', ['sn' => $unit->display_id]), 'data' => $unit]);
+        return response()->json([
+            'message' => __('Unit :sn sent to re-cut.', ['sn' => $unit->display_id]),
+            'data' => $unit,
+            'warnings' => $this->serials->takeProducedQtyWarnings(),
+        ]);
     }
 
     public function recordStep(RecordSerialUnitStepRequest $request, SerialUnit $serialUnit): JsonResponse

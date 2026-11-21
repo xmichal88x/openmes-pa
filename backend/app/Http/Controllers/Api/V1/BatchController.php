@@ -6,10 +6,12 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\RecutBatchesRequest;
 use App\Http\Requests\Api\V1\ReleaseBatchRequest;
 use App\Models\Batch;
+use App\Models\SerialUnit;
 use App\Models\WorkOrder;
 use App\Services\Lot\BatchReleaseService;
 use App\Services\Material\MaterialAllocationService;
 use App\Services\WorkOrder\WorkOrderService;
+use App\Support\ApiValidationError;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -120,56 +122,130 @@ class BatchController extends Controller
      * and reopens a DONE order to IN_PROGRESS. PENDING/IN_PROGRESS keep their
      * status. Repeating the same `idempotency_key` returns the batch created by
      * the first call instead of cutting a second one.
+     *
+     * A replacement must prove the substitution: it names the batch it replaces,
+     * and a replaced batch that carries units must already have one scrapped
+     * (`recut_original_not_scrapped`, 422) - see assertReplacementEvidence().
      */
     public function recut(RecutBatchesRequest $request, WorkOrder $workOrder): JsonResponse
     {
         $validated = $request->validated();
 
-        [$batch, $created] = DB::transaction(function () use ($workOrder, $validated) {
-            $workOrder = WorkOrder::whereKey($workOrder->getKey())->lockForUpdate()->firstOrFail();
+        try {
+            [$batch, $created] = DB::transaction(function () use ($workOrder, $validated) {
+                $workOrder = WorkOrder::whereKey($workOrder->getKey())->lockForUpdate()->firstOrFail();
 
-            $existing = Batch::query()
-                ->where('work_order_id', $workOrder->id)
-                ->where('is_replacement', true)
-                ->where('extra_data->idempotency_key', $validated['idempotency_key'])
-                ->first();
+                $existing = Batch::query()
+                    ->where('work_order_id', $workOrder->id)
+                    ->where('is_replacement', true)
+                    ->where('extra_data->idempotency_key', $validated['idempotency_key'])
+                    ->first();
 
-            if ($existing) {
-                return [$existing->load(['steps', 'workstation']), false];
-            }
-
-            if ($workOrder->status === WorkOrder::STATUS_DONE) {
-                $reopened = WorkOrderService::applyTransition($workOrder, 'reopen');
-
-                if (! $reopened['ok']) {
-                    abort(422, $reopened['message']);
+                if ($existing) {
+                    // An idempotent replay answers the first call's outcome; the
+                    // original's unit states may legitimately have moved since.
+                    return [$existing->load(['steps', 'workstation']), false];
                 }
 
-                $workOrder = $workOrder->fresh();
-            }
+                // The substitution has to be proven before the replacement exists
+                // (RQ-PA-263 / lesson RC-32): the replaced batch must already have
+                // a scrapped unit whenever it carries units at all.
+                $replaced = Batch::query()->whereKey($validated['replaces_batch_id'])->firstOrFail();
+                $this->assertReplacementEvidence($replaced, $workOrder);
 
-            // Reuse the normal batch creation path (numbering, status, steps from
-            // the process snapshot) but skip BatchController::store's planned-qty
-            // guard: a replacement lives outside the order's planned quantity.
-            $batch = $this->workOrderService->createBatch($workOrder, (float) $validated['target_qty']);
+                if ($workOrder->status === WorkOrder::STATUS_DONE) {
+                    $reopened = WorkOrderService::applyTransition($workOrder, 'reopen');
 
-            // Replacement flags are intentionally not mass-assignable.
-            $batch->forceFill([
-                'is_replacement' => true,
-                'replaces_batch_id' => $validated['replaces_batch_id'] ?? null,
-                'extra_data' => [
-                    'idempotency_key' => $validated['idempotency_key'],
-                    'reason' => $validated['reason'],
-                ],
-            ])->save();
+                    if (! $reopened['ok']) {
+                        abort(422, $reopened['message']);
+                    }
 
-            return [$batch->fresh(['steps', 'workstation']), true];
-        });
+                    $workOrder = $workOrder->fresh();
+                }
+
+                // Reuse the normal batch creation path (numbering, status, steps from
+                // the process snapshot) but skip BatchController::store's planned-qty
+                // guard: a replacement lives outside the order's planned quantity.
+                $batch = $this->workOrderService->createBatch($workOrder, (float) $validated['target_qty']);
+
+                // Replacement flags are intentionally not mass-assignable.
+                $batch->forceFill([
+                    'is_replacement' => true,
+                    'replaces_batch_id' => (int) $validated['replaces_batch_id'],
+                    'extra_data' => [
+                        'idempotency_key' => $validated['idempotency_key'],
+                        'reason' => $validated['reason'],
+                    ],
+                ])->save();
+
+                return [$batch->fresh(['steps', 'workstation']), true];
+            });
+        } catch (\DomainException $e) {
+            // A refused substitution is an outcome the caller can act on, not a
+            // server fault: the transaction has rolled back.
+            return ApiValidationError::response('recut', $e->getMessage());
+        }
 
         return response()->json([
             'message' => $created ? 'Replacement batch created successfully' : 'Replacement batch already exists',
             'data' => $batch,
         ], $created ? 201 : 200);
+    }
+
+    /**
+     * A replacement has to prove the substitution (RQ-PA-263 / lesson RC-32).
+     *
+     * The replaced batch must carry at least one `scrapped` unit: that is the
+     * physical proof the piece it replaces is gone. Without it a replacement
+     * sits next to the original and both get counted (the manual batch 2301
+     * beside 2304).
+     *
+     * Polityka: brak jednostek = brak dowodu substytucji do zebrania; batch
+     * planowy (korekta planu przed produkcją) nie ma czego złomować. A CANCELLED
+     * batch is read the same way — cancelling does not remove its units, so a
+     * cancelled batch that still carries units must still show a scrapped one.
+     *
+     * @throws \DomainException with the refusal the caller can act on
+     */
+    private function assertReplacementEvidence(Batch $replaced, WorkOrder $workOrder): void
+    {
+        $units = SerialUnit::query()
+            ->where('batch_id', $replaced->id)
+            ->get(['id', 'status']);
+
+        // Mirrors the packing gate (I15): on a single-batch order a unit carrying
+        // no batch is that batch's unit, so it is part of the proof too - the
+        // rollup counts it, and a gate that ignored it would let the same double
+        // count back in through the loose-unit door.
+        if ($workOrder->batches()->count() === 1) {
+            $units = $units->concat(
+                SerialUnit::query()
+                    ->where('work_order_id', $workOrder->id)
+                    ->whereNull('batch_id')
+                    ->get(['id', 'status']),
+            );
+        }
+
+        if ($units->isEmpty()) {
+            return;
+        }
+
+        if ($units->contains(fn (SerialUnit $unit) => $unit->status === SerialUnit::STATUS_SCRAPPED)) {
+            return;
+        }
+
+        $statuses = $units->countBy('status')
+            ->map(fn (int $count, string $status) => "{$status} x{$count}")
+            ->implode(', ');
+
+        throw new \DomainException(__(
+            'recut_original_not_scrapped: batch :batch still carries :count unit(s) (:statuses) and none is scrapped, so a replacement would sit next to the original instead of substituting it. Scrap the original unit first (POST /serial-units/{id}/recut), or use the top-up path when nothing was cut.',
+            [
+                'batch' => $replaced->id,
+                'count' => $units->count(),
+                'statuses' => $statuses,
+            ],
+        ));
     }
 
     /**

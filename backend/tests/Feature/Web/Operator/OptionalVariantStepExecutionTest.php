@@ -121,10 +121,12 @@ class OptionalVariantStepExecutionTest extends TestCase
         // Group "finish" now has zero executed steps → batch must NOT be complete.
         $this->assertFalse($batch->fresh()->allStepsComplete());
 
-        // Choosing + completing one variant resolves the group.
+        // Choosing + completing one variant resolves the group. The quantity is
+        // stated so the batch has a declared source (RQ-PA-263); this test is
+        // about the variant group, not about the produced quantity.
         $svc->chooseVariant($this->step($batch, 3)->fresh(), $this->operator);
         $svc->startStep($this->step($batch, 3)->fresh(), $this->operator);
-        $svc->completeStep($this->step($batch, 3)->fresh(), $this->operator);
+        $svc->completeStep($this->step($batch, 3)->fresh(), $this->operator, ['produced_qty' => 10]);
 
         $this->assertTrue($batch->fresh()->allStepsComplete());
     }

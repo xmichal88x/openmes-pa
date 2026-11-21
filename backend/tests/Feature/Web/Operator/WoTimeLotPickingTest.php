@@ -251,6 +251,13 @@ class WoTimeLotPickingTest extends TestCase
             ])
             ->assertSessionHasNoErrors();
 
+        // Polityka danych testowych (RQ-PA-263): this test measures the genealogy
+        // written from the picks, not the produced quantity. The web completion
+        // form carries no quantity, so the batch's source is declared here - an
+        // undeclared source would be refused by the rollup instead.
+        $this->batch->setProducedQtySource(Batch::PRODUCED_QTY_SOURCE_MANUAL);
+        $this->batch->update(['extra_data' => $this->batch->extra_data]);
+
         // Single-step batch → completing the step completes & consumes the batch.
         $this->actingOperator()
             ->post("/operator/batch-step/{$this->step->id}/complete")
