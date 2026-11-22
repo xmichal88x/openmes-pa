@@ -659,6 +659,16 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     // Work Orders
     Route::apiResource('work-orders', WorkOrderController::class);
 
+    // Material settlement pilot (RQ-PA-265): which components of this order are
+    // settled by the operation that consumes them. Reading is part of viewing
+    // the order; changing it changes who may book the material, so it is an
+    // administrative decision and leaves an audited trace on the order.
+    Route::get('/work-orders/{workOrder}/material-settlement', [\App\Http\Controllers\Api\V1\MaterialSettlementController::class, 'index']);
+    Route::middleware('role:Admin')->group(function () {
+        Route::post('/work-orders/{workOrder}/material-settlement', [\App\Http\Controllers\Api\V1\MaterialSettlementController::class, 'store']);
+        Route::delete('/work-orders/{workOrder}/material-settlement', [\App\Http\Controllers\Api\V1\MaterialSettlementController::class, 'destroy']);
+    });
+
     // Work Order status transitions
     Route::post('/work-orders/{workOrder}/accept', [WorkOrderController::class, 'accept']);
     Route::post('/work-orders/{workOrder}/reject', [WorkOrderController::class, 'reject']);
