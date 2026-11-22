@@ -4,6 +4,7 @@ import { Button, InlineAlert, TextField } from '@openmes/ui';
 import OperatorLayout from '../../../layouts/OperatorLayout';
 import usePrompt from '../../../components/usePrompt';
 import { __, formatDateTime } from '../../../lib/i18n';
+import { noticeFrom } from './notice';
 
 function csrf() {
     const meta = document.querySelector('meta[name="csrf-token"]');
@@ -19,12 +20,14 @@ export default function ReworkIndex() {
     const [scan, setScan] = useState('');
     const [selectedId, setSelectedId] = useState(null);
     const [error, setError] = useState(null);
+    const [notice, setNotice] = useState(null); // what the last decision answered, warnings included
     const [busyId, setBusyId] = useState(null);
     const { prompt, dialog: promptDialog } = usePrompt();
 
     const selectByScan = () => {
         const code = normalize(scan);
         if (code === '') return;
+        setNotice(null);
         const unit = units.find((u) => normalize(u.serial_no) === code || normalize(u.psn) === code);
         if (!unit) {
             setSelectedId(null);
@@ -39,6 +42,7 @@ export default function ReworkIndex() {
     const submit = async (unit, action, body) => {
         setBusyId(unit.id);
         setError(null);
+        setNotice(null);
         try {
             const res = await fetch(`/operator/unit-labels/${unit.id}/${action}`, {
                 method: 'POST',
@@ -50,11 +54,14 @@ export default function ReworkIndex() {
                 },
                 body: JSON.stringify(body),
             });
+            const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
                 setError(data.message ?? __('Could not save the rework decision.'));
                 return;
             }
+            // The decision lands even when the quantity cannot be re-derived; the
+            // answer says so in `warnings`, and the operator must see it.
+            setNotice(noticeFrom(data));
             router.reload({ only: ['units'] });
         } catch {
             setError(__('Could not save the rework decision.'));
@@ -104,6 +111,14 @@ export default function ReworkIndex() {
                 </div>
 
                 {error && <InlineAlert severity="error" title={error} />}
+
+                {notice && (
+                    <div className="space-y-2">
+                        {notice.lines.map((line, index) => (
+                            <InlineAlert key={`${notice.severity}-${index}`} severity={notice.severity} title={line} />
+                        ))}
+                    </div>
+                )}
 
                 {units.length === 0 ? (
                     <InlineAlert severity="info" title={__('No blocked units.')} />
