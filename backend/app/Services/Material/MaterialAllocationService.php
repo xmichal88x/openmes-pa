@@ -3,6 +3,7 @@
 namespace App\Services\Material;
 
 use App\Exceptions\InsufficientStockException;
+use App\Exceptions\MaterialCorrectionException;
 use App\Models\Batch;
 use App\Models\BatchStep;
 use App\Models\BatchStepLotConsumption;
@@ -12,11 +13,18 @@ use App\Models\StockMovement;
 use App\Models\User;
 use App\Models\WorkOrder;
 use App\Support\StockMovementReason;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class MaterialAllocationService
 {
+    /** The number was declared by a person at the machine. */
+    public const SOURCE_OPERATOR = 'operator';
+
+    /** The number was booked by the system itself (packaging, batch completion). */
+    public const SOURCE_SYSTEM = 'system';
+
     public function __construct(
         protected StockMovementService $stockMovements,
         protected LotPickingService $lotPicking,
@@ -369,17 +377,48 @@ class MaterialAllocationService
      * to allocated_qty for any rows where the operator did not record an
      * explicit number. Also releases the reservation and applies any
      * leftover difference (returned + scrap) back to stock.
+     *
+     * Allocations in the pilot settlement scope that still owe a confirmation
+     * are left completely alone — no stock movement, no reservation release,
+     * no location deduction, no genealogy, no status change — and come back in
+     * `pending` with the reason. This is the COGI / Pending Transactions rule:
+     * a missing retrieval is never stood in for by the plan, and the rest of
+     * the batch settles normally.
+     *
+     * A declared retrieval above the allocation is unplanned consumption: that
+     * material physically left the store beyond what was withdrawn, so the excess
+     * is booked as a consumption of its own. Without it the plant-wide balance
+     * would keep claiming stock that no longer exists. Only the pilot scope does
+     * this — the legacy scope keeps its pre-existing behaviour untouched.
+     *
+     * @return array{settled: int, pending: array<int, array{allocation_id: int, material_id: int, reason: string}>, unplanned: array<int, array{allocation_id: int, material_id: int, quantity: float}>}
      */
-    public function consumeForBatch(Batch $batch): void
+    public function consumeForBatch(Batch $batch): array
     {
-        DB::transaction(function () use ($batch) {
+        return DB::transaction(function () use ($batch) {
             $allocations = MaterialAllocation::where('batch_id', $batch->id)
                 ->where('status', MaterialAllocation::STATUS_ALLOCATED)
                 ->lockForUpdate()
-                ->with(['material', 'lotPicks'])
+                ->with(['material', 'lotPicks', 'workOrder'])
                 ->get();
 
+            $policy = app(MaterialSettlementPolicy::class);
+            $settled = 0;
+            $pending = [];
+            $unplanned = [];
+
             foreach ($allocations as $allocation) {
+                // Waiting for settlement: nothing about it may move.
+                $reason = $policy->pendingReason($allocation);
+                if ($reason !== null) {
+                    $pending[] = [
+                        'allocation_id' => (int) $allocation->id,
+                        'material_id' => (int) $allocation->material_id,
+                        'reason' => $reason,
+                    ];
+
+                    continue;
+                }
                 // Bridge the picked lots into the ISA-95 genealogy table so
                 // forward/backward traceability reflects what was actually
                 // consumed. consumeForBatch runs once per batch (allocations
@@ -393,7 +432,18 @@ class MaterialAllocationService
                     ? (float) $allocation->consumed_qty
                     : (float) $allocation->allocated_qty;
 
-                $leftoverToReturn = max(0, (float) $allocation->allocated_qty - $actualConsumed - (float) $allocation->scrap_qty);
+                $declared = $actualConsumed + (float) $allocation->scrap_qty;
+
+                // Pilot only: what the operation retrieved above what it withdrew
+                // came off the store unannounced, and has to be booked as such.
+                $excessOfAllocation = 0.0;
+                if ($allocation->consumption_recorded
+                    && $declared > (float) $allocation->allocated_qty
+                    && $policy->modeFor($allocation->workOrder, (int) $allocation->material_id) === MaterialSettlementPolicy::MODE_OPERATION) {
+                    $excessOfAllocation = round($declared - (float) $allocation->allocated_qty, 4);
+                }
+
+                $leftoverToReturn = max(0, (float) $allocation->allocated_qty - $declared);
 
                 $this->releaseReservation($allocation->material, (float) $allocation->allocated_qty);
 
@@ -419,15 +469,34 @@ class MaterialAllocationService
                     );
                 }
 
+                // Unplanned consumption above the allocation: booked before the
+                // location is finalised, and without an actor — the movement says
+                // what left the plant, not who declared it (that is on the
+                // confirmation itself). No reservation is released for it: only
+                // what was allocated was ever reserved.
+                if ($excessOfAllocation > 0 && $allocation->material) {
+                    $this->stockMovements->record(
+                        $allocation->material,
+                        StockMovement::TYPE_CONSUME,
+                        -$excessOfAllocation,
+                        sourceType: StockMovement::SOURCE_BATCH,
+                        sourceId: $batch->id,
+                        reason: StockMovementReason::make('Unplanned consumption above the allocation — batch #:batch', ['batch' => $batch->id]),
+                    );
+
+                    $unplanned[] = [
+                        'allocation_id' => (int) $allocation->id,
+                        'material_id' => (int) $allocation->material_id,
+                        'quantity' => $excessOfAllocation,
+                    ];
+                }
+
                 // Finalise the location balance against the quantity that actually
                 // stands. Deducts only the part not already booked by the operator's
                 // own entries, so a batch whose consumption was recorded step by step
                 // is not deducted twice. Scrap counts: it physically left the store
                 // too — only the leftover being returned above stayed behind.
-                $this->consumptionLocation->deduct(
-                    $allocation,
-                    $actualConsumed + (float) $allocation->scrap_qty,
-                );
+                $this->consumptionLocation->deduct($allocation, $declared);
 
                 $allocation->update([
                     'status' => MaterialAllocation::STATUS_CONSUMED,
@@ -437,7 +506,11 @@ class MaterialAllocationService
                     'unit_price_snapshot' => $actualConsumed > 0 ? $allocation->material?->unit_price : null,
                     'price_currency_snapshot' => $actualConsumed > 0 ? $allocation->material?->price_currency : null,
                 ]);
+
+                $settled++;
             }
+
+            return ['settled' => $settled, 'pending' => $pending, 'unplanned' => $unplanned];
         });
     }
 
@@ -480,40 +553,348 @@ class MaterialAllocationService
     }
 
     /**
-     * Record actual consumed quantity for a single allocation. Operator
-     * calls this from the post-step UI. Optionally records scrap.
+     * Record actual consumed quantity for a single allocation. Operator calls
+     * this from the post-step UI. Optionally records scrap.
+     *
+     * In the pilot scope (the operation owns the withdrawal) this is not a
+     * quantity write but a confirmation document: it names the person, the time,
+     * the source and, when one is supplied, an idempotency key. A pilot
+     * confirmation without a person is refused — a number nobody signed cannot
+     * settle an operation's retrieval.
+     *
+     * A key already on record makes the call a replay: the same row with the same
+     * quantities is answered with what the first call left behind (no second
+     * deduction, no re-stamp), while the same key against other quantities or
+     * another allocation is a conflict.
      */
     public function recordConsumption(
         MaterialAllocation $allocation,
         float $actualConsumed,
         float $scrap = 0,
         ?string $notes = null,
+        ?User $user = null,
+        ?string $source = null,
+        ?string $key = null,
     ): MaterialAllocation {
-        if ($allocation->status !== MaterialAllocation::STATUS_ALLOCATED) {
-            throw new \DomainException('Allocation must be in `allocated` status to record consumption.');
-        }
         if ($actualConsumed < 0 || $scrap < 0) {
             throw new \InvalidArgumentException('Consumed and scrap quantities must be non-negative.');
         }
 
-        return DB::transaction(function () use ($allocation, $actualConsumed, $scrap) {
-            $allocation->update([
-                'consumed_qty' => $actualConsumed,
-                'consumption_recorded' => true,
-                'scrap_qty' => $scrap,
-                // Snapshot the price so historical cost reports stay stable.
-                'unit_price_snapshot' => $actualConsumed > 0 ? $allocation->material?->unit_price : null,
-                'price_currency_snapshot' => $actualConsumed > 0 ? $allocation->material?->price_currency : null,
-            ]);
+        // Checked before the status guard on purpose: a retry that arrives after
+        // the batch already settled must still be answered as the same document,
+        // not refused because the row has moved on.
+        if ($key !== null) {
+            $replay = $this->replayForKey($key, $allocation, $actualConsumed, $scrap);
+            if ($replay !== null) {
+                return $replay;
+            }
+        }
 
-            // Take it off the location it came from — consumed plus scrap, since both
-            // physically left the store. Same transaction as the quantity itself, so a
-            // refused deduction (location short, plant blocks negatives) leaves no
-            // consumed_qty claiming material that never moved.
-            $this->consumptionLocation->deduct($allocation->fresh(), $actualConsumed + $scrap);
+        if ($allocation->status !== MaterialAllocation::STATUS_ALLOCATED) {
+            throw new \DomainException('Allocation must be in `allocated` status to record consumption.');
+        }
 
-            return $allocation->fresh();
-        });
+        $workOrder = $allocation->workOrder;
+        $pilot = $workOrder !== null
+            && app(MaterialSettlementPolicy::class)
+                ->modeFor($workOrder, (int) $allocation->material_id) === MaterialSettlementPolicy::MODE_OPERATION;
+
+        if ($pilot && $user === null) {
+            throw new \DomainException(__('A pilot consumption needs the operator who declared it.'));
+        }
+
+        // Evidence is written whenever the call carries any: always in the pilot
+        // scope, and elsewhere as soon as someone (or something) is named.
+        $recordEvidence = $pilot || $user !== null || $source !== null;
+        $source ??= $recordEvidence ? self::SOURCE_OPERATOR : null;
+
+        try {
+            return DB::transaction(function () use ($allocation, $actualConsumed, $scrap, $user, $source, $key, $recordEvidence) {
+                $attributes = [
+                    'consumed_qty' => $actualConsumed,
+                    'consumption_recorded' => true,
+                    'scrap_qty' => $scrap,
+                    // Snapshot the price so historical cost reports stay stable.
+                    'unit_price_snapshot' => $actualConsumed > 0 ? $allocation->material?->unit_price : null,
+                    'price_currency_snapshot' => $actualConsumed > 0 ? $allocation->material?->price_currency : null,
+                ];
+
+                if ($recordEvidence) {
+                    $attributes['consumption_recorded_by_id'] = $user?->id;
+                    $attributes['consumption_recorded_at'] = now();
+                    $attributes['consumption_source'] = $source;
+                }
+
+                if ($key !== null) {
+                    $attributes['consumption_key'] = $key;
+                }
+
+                $allocation->update($attributes);
+
+                // Take it off the location it came from — consumed plus scrap, since both
+                // physically left the store. Same transaction as the quantity itself, so a
+                // refused deduction (location short, plant blocks negatives) leaves no
+                // consumed_qty claiming material that never moved.
+                $this->consumptionLocation->deduct($allocation->fresh(), $actualConsumed + $scrap, $user);
+
+                return $allocation->fresh();
+            });
+        } catch (QueryException $e) {
+            // Two requests carrying the same key raced past the lookup above; the
+            // unique index is the real arbiter (Postgres and SQLite both raise a
+            // constraint violation, which Laravel surfaces as QueryException).
+            // Re-read and answer as a replay or a conflict, never as a DB error.
+            if ($key === null) {
+                throw $e;
+            }
+
+            $replay = $this->replayForKey($key, $allocation, $actualConsumed, $scrap);
+            if ($replay !== null) {
+                return $replay;
+            }
+
+            throw $e;
+        }
+    }
+
+    /**
+     * The allocation already recorded under this key, if the call is a replay of
+     * that confirmation.
+     *
+     * Returns null when the key is unused; the same row with the same quantities
+     * is returned unchanged; anything else throws, because a key that would name
+     * two different documents cannot be resolved silently.
+     */
+    private function replayForKey(
+        string $key,
+        MaterialAllocation $allocation,
+        float $actualConsumed,
+        float $scrap,
+    ): ?MaterialAllocation {
+        $existing = MaterialAllocation::query()->where('consumption_key', $key)->first();
+
+        if ($existing === null) {
+            return null;
+        }
+
+        $sameRow = (int) $existing->getKey() === (int) $allocation->getKey();
+        $sameValues = abs((float) $existing->consumed_qty - $actualConsumed) < 1e-9
+            && abs((float) $existing->scrap_qty - $scrap) < 1e-9;
+
+        if ($sameRow && $sameValues) {
+            return $existing;
+        }
+
+        throw new \DomainException(__(
+            'Material consumption confirmation conflict (:code): the key :key already names another confirmation.',
+            ['code' => 'material_consumption_key_conflict', 'key' => $key],
+        ));
+    }
+
+    /**
+     * Correct a settled pilot consumption (RQ-PA-265 A5).
+     *
+     * The confirmation stays as it was declared — who, when, from where — and the
+     * correction is recorded beside it as a new document: a reviewer, a time, a
+     * reason and a reference to what is being corrected. Only the difference is
+     * booked, as a compensating movement, so the ledger keeps both halves of what
+     * happened instead of losing the first.
+     *
+     * Four eyes (maker-checker): the person who declared the retrieval cannot
+     * approve its correction, whatever their role. Whether the approver may review
+     * at all is the `approve work order changes` right, enforced on the route.
+     *
+     * Only the pilot scope has a correction path: in the legacy scope the batch
+     * settled with the plan and there is no operation confirmation to correct. A
+     * line still waiting for settlement closes through `consume`/`settle` first —
+     * correcting it here would post a compensation against a number that was never
+     * confirmed.
+     *
+     * A key already on record makes the call a replay (same row, same quantities,
+     * nothing booked again); the same key against other quantities or another
+     * allocation is a conflict, because one key cannot name two documents.
+     *
+     * @throws MaterialCorrectionException when the line is out of scope, not settled,
+     *                                     approved by its own declarant, or the key conflicts
+     * @throws \InvalidArgumentException when a quantity is negative or the reason/reference is blank
+     */
+    public function correctConsumption(
+        MaterialAllocation $allocation,
+        float $consumed,
+        float $scrap,
+        string $reason,
+        string $reference,
+        User $approver,
+        ?string $key = null,
+    ): MaterialAllocation {
+        if ($consumed < 0 || $scrap < 0) {
+            throw new \InvalidArgumentException('Corrected consumed and scrap quantities must be non-negative.');
+        }
+
+        if (trim($reason) === '' || trim($reference) === '') {
+            throw new \InvalidArgumentException('A correction needs a reason and a reference to the original confirmation.');
+        }
+
+        $this->assertCorrectable($allocation, $approver);
+
+        // A retry that arrives with the key of a correction already posted is
+        // answered with what that call left behind. Same row and same quantities
+        // are the same document; anything else is unresolvable in silence.
+        if ($key !== null) {
+            $replay = $this->replayCorrectionForKey($key, $allocation, $consumed, $scrap);
+            if ($replay !== null) {
+                return $replay;
+            }
+        }
+
+        try {
+            return DB::transaction(function () use ($allocation, $consumed, $scrap, $reason, $reference, $approver, $key) {
+                // Re-read under a lock: two reviewers correcting the same line at
+                // once must each measure their difference against the latest
+                // committed quantities, not against what the request started with.
+                $locked = MaterialAllocation::query()->lockForUpdate()->findOrFail($allocation->getKey());
+                $this->assertCorrectable($locked, $approver);
+
+                $previousTotal = round((float) $locked->consumed_qty + (float) $locked->scrap_qty, 4);
+                $newTotal = round($consumed + $scrap, 4);
+                $delta = round($newTotal - $previousTotal, 4);
+
+                if (abs($delta) >= 0.0001) {
+                    if (! $locked->material) {
+                        throw new \DomainException('Allocation has no associated material.');
+                    }
+
+                    // The correction is a movement of its own: positive quantity
+                    // when the store gets material back, negative when more left.
+                    $this->stockMovements->record(
+                        $locked->material,
+                        StockMovement::TYPE_ADJUSTMENT,
+                        -$delta,
+                        user: $approver,
+                        sourceType: StockMovement::SOURCE_BATCH,
+                        sourceId: (int) $locked->batch_id,
+                        reason: StockMovementReason::make(
+                            'Correction of material consumption (:reference): :reason',
+                            ['reference' => $reference, 'reason' => $reason],
+                        ),
+                    );
+                }
+
+                // The location is credited/debited by the same difference only —
+                // `deduct` compares the total against what it already took, so a
+                // downward correction gives the store back what it gave up.
+                $this->consumptionLocation->deduct($locked, $newTotal, $approver);
+
+                $attributes = [
+                    'consumed_qty' => $consumed,
+                    'scrap_qty' => $scrap,
+                    // The correction document. The confirmation it corrects
+                    // (consumption_recorded_*, consumed_at, status) is not touched:
+                    // history is append-only.
+                    'correction_recorded_by_id' => $approver->id,
+                    'correction_recorded_at' => now(),
+                    'correction_reason' => $reason,
+                    'correction_reference' => $reference,
+                ];
+
+                // A keyless correction never erases the key of an earlier one — the
+                // key has to keep pointing at a document, or a late retry of it would
+                // look unused and compensate again.
+                if ($key !== null) {
+                    $attributes['correction_key'] = $key;
+                }
+
+                $locked->update($attributes);
+
+                return $locked->fresh();
+            });
+        } catch (QueryException $e) {
+            // Two requests carrying the same key raced past the lookup above; the
+            // unique index is the real arbiter. Re-read and answer as a replay or
+            // a conflict, never as a DB error.
+            if ($key === null) {
+                throw $e;
+            }
+
+            $replay = $this->replayCorrectionForKey($key, $allocation, $consumed, $scrap);
+            if ($replay !== null) {
+                return $replay;
+            }
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Refuse a correction this line or this approver cannot give.
+     *
+     * @throws MaterialCorrectionException
+     */
+    private function assertCorrectable(MaterialAllocation $allocation, User $approver): void
+    {
+        $workOrder = $allocation->workOrder;
+
+        if ($workOrder === null
+            || app(MaterialSettlementPolicy::class)
+                ->modeFor($workOrder, (int) $allocation->material_id) !== MaterialSettlementPolicy::MODE_OPERATION) {
+            throw new MaterialCorrectionException(
+                MaterialCorrectionException::NOT_APPLICABLE,
+                __('This allocation is not settled by its operation — there is nothing to correct.'),
+            );
+        }
+
+        if ($allocation->status !== MaterialAllocation::STATUS_CONSUMED) {
+            throw new MaterialCorrectionException(
+                MaterialCorrectionException::REQUIRES_SETTLED,
+                __('The settlement has not been posted yet: settle it first, then correct it.'),
+            );
+        }
+
+        if ($approver->id !== null && (int) $allocation->consumption_recorded_by_id === (int) $approver->id) {
+            throw new MaterialCorrectionException(
+                MaterialCorrectionException::REQUIRES_OTHER_APPROVER,
+                __('The person who declared the consumption cannot approve its correction — four eyes are required.'),
+            );
+        }
+    }
+
+    /**
+     * The correction already recorded under this key, if the call is a replay of
+     * that correction.
+     *
+     * Returns null when the key is unused; the same row with the same quantities is
+     * returned unchanged; anything else throws, because a key that would name two
+     * different documents cannot be resolved silently.
+     *
+     * @throws MaterialCorrectionException
+     */
+    private function replayCorrectionForKey(
+        string $key,
+        MaterialAllocation $allocation,
+        float $consumed,
+        float $scrap,
+    ): ?MaterialAllocation {
+        $existing = MaterialAllocation::query()->where('correction_key', $key)->first();
+
+        if ($existing === null) {
+            return null;
+        }
+
+        $sameRow = (int) $existing->getKey() === (int) $allocation->getKey();
+        $sameValues = abs((float) $existing->consumed_qty - $consumed) < 1e-9
+            && abs((float) $existing->scrap_qty - $scrap) < 1e-9;
+
+        if ($sameRow && $sameValues) {
+            return $existing;
+        }
+
+        throw new MaterialCorrectionException(
+            MaterialCorrectionException::KEY_CONFLICT,
+            __('Material correction conflict (:code): the key :key already names another correction.', [
+                'code' => MaterialCorrectionException::KEY_CONFLICT,
+                'key' => $key,
+            ]),
+        );
     }
 
     /**

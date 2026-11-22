@@ -8,6 +8,7 @@ use App\Models\StockDocument;
 use App\Models\StockMovement;
 use App\Models\User;
 use App\Models\Warehouse;
+use App\Services\Material\MaterialSettlementPolicy;
 use App\Services\Material\StockMovementService;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
@@ -28,6 +29,10 @@ use Illuminate\Validation\ValidationException;
  *
  * Cancelling a posted document reverses all of it, so a mis-posted release can
  * be undone without editing balances by hand.
+ *
+ * A document only books what it owns: a component whose settlement belongs to
+ * its production operation is refused here, before anything moves. Reversal is
+ * never refused — it undoes a booking rather than making one.
  */
 class StockDocumentService
 {
@@ -37,6 +42,7 @@ class StockDocumentService
     public function __construct(
         private StockMovementService $stockMovements,
         private WarehouseStockService $warehouseStock,
+        private MaterialSettlementPolicy $settlement,
     ) {}
 
     /**
@@ -128,6 +134,10 @@ class StockDocumentService
                     'lines' => __('A stock document needs at least one line.'),
                 ]);
             }
+
+            // Ownership is judged before the first line moves: a refused posting
+            // leaves the document a draft and every balance where it was.
+            $this->guardSettlementOwnership($document);
 
             foreach ($document->lines as $line) {
                 $this->applyLine($document, $line, reverse: false, user: $user);
@@ -227,6 +237,46 @@ class StockDocumentService
         $sequence = $last ? ((int) substr($last, strrpos($last, '/') + 1)) + 1 : 1;
 
         return sprintf('%s/%d/%04d', $prefix, $year, $sequence);
+    }
+
+    /**
+     * Refuse a withdrawal somebody else owns (SAP: consumption cannot be posted
+     * for a product marked for backflush — one item, one author).
+     *
+     * Only a material issue tied to a work order can be owned elsewhere, and the
+     * scope lives in that order's frozen snapshot. An order that no longer
+     * exists answers for nothing, read exactly as an order with no entry at all.
+     */
+    private function guardSettlementOwnership(StockDocument $document): void
+    {
+        if ($document->type !== StockDocument::TYPE_MATERIAL_ISSUE || $document->work_order_id === null) {
+            return;
+        }
+
+        $workOrder = $document->workOrder;
+
+        if (! $workOrder) {
+            return;
+        }
+
+        foreach ($document->lines as $line) {
+            if ($line->material_id === null) {
+                continue;
+            }
+
+            $materialId = (int) $line->material_id;
+
+            if ($this->settlement->modeFor($workOrder, $materialId) !== MaterialSettlementPolicy::MODE_OPERATION) {
+                continue;
+            }
+
+            throw ValidationException::withMessages([
+                'lines' => __('Material :code is settled by its production operation and cannot be posted here.', [
+                    // A line pointing at a deleted material still names what it is.
+                    'code' => Material::whereKey($materialId)->value('code') ?? "#{$materialId}",
+                ]),
+            ]);
+        }
     }
 
     /**

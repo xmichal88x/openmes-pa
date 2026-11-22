@@ -6,6 +6,14 @@ use App\Models\Material;
 use App\Models\MaterialType;
 use Illuminate\Support\Str;
 
+/**
+ * Pulling materials (and their balances) from another system.
+ *
+ * A balance that is still awaiting settlement by its production operation is
+ * not the ERP's to overwrite: one item, one author. Such a row is reported and
+ * skipped whole — never half-applied — so the plant keeps the quantity the
+ * operation withdrew and the discrepancy stays visible to the person syncing.
+ */
 class MaterialSyncService
 {
     /**
@@ -33,6 +41,20 @@ class MaterialSyncService
                     ->first();
 
                 if ($existing) {
+                    // The row would rewrite a balance the operation still owes:
+                    // report it and leave every column of this row untouched.
+                    if (isset($row['stock_quantity']) && app(MaterialSettlementPolicy::class)->hasPendingSettlement($existing)) {
+                        $result['errors'][] = [
+                            'index' => $index,
+                            'external_code' => $row['external_code'] ?? null,
+                            'error' => __('Material :code is settled by its production operation; its stock cannot be overwritten while the settlement is pending.', [
+                                'code' => $existing->code,
+                            ]),
+                        ];
+
+                        continue;
+                    }
+
                     $updateData = [
                         'name' => $row['name'],
                         'description' => $row['description'] ?? $existing->description,

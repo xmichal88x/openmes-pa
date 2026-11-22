@@ -2,8 +2,11 @@
 
 namespace App\Services\Settings;
 
+use App\Exceptions\MaterialSettlementOwnershipException;
 use App\Exceptions\PalletBackflushImportRefusedException;
 use App\Http\Requests\UpdateSystemSettingsRequest;
+use App\Models\Material;
+use App\Services\Material\MaterialSettlementPolicy;
 use App\Support\TimezoneRegistry;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -35,6 +38,11 @@ use Illuminate\Support\Facades\Validator;
  *    The production flow mode is never taken from a file; the plant timezone
  *    only when it is a valid zone, and it applies at once. A file that switches
  *    on pallet backflush is refused whole, not imported with the value dropped.
+ *  - A file that overwrites the stock of a material whose settlement is still
+ *    pending (its withdrawal is owed to the operation that consumed it) is
+ *    refused whole: one item, one author, and the file is not allowed to
+ *    become the second one. A row that carries no balance — a name, a
+ *    description, an attribute — is safe and imports as before.
  */
 class ConfigurationImporter
 {
@@ -141,6 +149,10 @@ class ConfigurationImporter
         $count = 0;
 
         DB::transaction(function () use ($data, &$count) {
+            // Before any row: a file that would overwrite a pending balance is
+            // refused whole, so nothing else from it lands either.
+            $this->guardMaterialSettlementOwnership($data);
+
             if (is_array($data['system_settings'] ?? null)) {
                 $count += $this->importSettings($data['system_settings']);
             }
@@ -158,6 +170,51 @@ class ConfigurationImporter
         });
 
         return $count;
+    }
+
+    /**
+     * Refuse a file that overwrites the stock of a material whose withdrawal
+     * still belongs to its production operation (SAP: no consumption posting for
+     * a product marked for backflush — and no second balance for it either).
+     *
+     * Only a row carrying a balance can do that, so only those rows are looked
+     * at: renaming a material, or editing its description, stays safe even while
+     * its settlement is pending. Checked by the file's own codes before any row
+     * is written, so the whole import is a single decision. A code the plant does
+     * not have yet cannot be in flight and passes through untouched.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function guardMaterialSettlementOwnership(array $data): void
+    {
+        $rows = $data['materials'] ?? null;
+
+        if (! is_array($rows) || $rows === [] || ! Schema::hasTable('materials')) {
+            return;
+        }
+
+        $codes = collect($rows)
+            ->filter(fn ($row) => is_array($row) && is_string($row['code'] ?? null) && $row['code'] !== '')
+            // A balance the file actually carries: a null one is not written, and
+            // then the row cannot overwrite anything.
+            ->filter(fn (array $row) => ($row['stock_quantity'] ?? null) !== null
+                || ($row['reserved_quantity'] ?? null) !== null)
+            ->pluck('code')
+            ->unique()
+            ->sort()
+            ->values();
+
+        if ($codes->isEmpty()) {
+            return;
+        }
+
+        $policy = app(MaterialSettlementPolicy::class);
+
+        foreach (Material::whereIn('code', $codes->all())->orderBy('code')->get() as $material) {
+            if ($policy->hasPendingSettlement($material)) {
+                throw new MaterialSettlementOwnershipException($material->code);
+            }
+        }
     }
 
     private function importSettings(array $settings): int

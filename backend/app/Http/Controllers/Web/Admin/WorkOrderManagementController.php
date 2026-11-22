@@ -144,7 +144,18 @@ class WorkOrderManagementController extends Controller
 
         // Materials reconciliation (#99): the allocations pulled for this order, so
         // the page can offer record-consumption / return / reclassify per material.
-        $workOrder->load(['allocations.material', 'allocations.lotPicks.lot']);
+        $workOrder->load([
+            'allocations.material',
+            'allocations.lotPicks.lot',
+            'allocations.batchStep',
+            // Confirmation and correction evidence, loaded here so the payload
+            // below does not cost one query per allocation (RQ-PA-265 A3).
+            'allocations.consumptionRecordedBy:id,name',
+            'allocations.correctionRecordedBy:id,name',
+        ]);
+        // The settlement policy reads the allocation's order; point the loaded
+        // rows at the one we already have instead of one query per allocation.
+        $workOrder->allocations->each->setRelation('workOrder', $workOrder);
         $allocations = $workOrder->allocations->map(fn ($a) => [
             'id' => $a->id,
             'material_id' => $a->material_id,
@@ -152,10 +163,27 @@ class WorkOrderManagementController extends Controller
             'material_name' => $a->material?->name,
             'unit_of_measure' => $a->material?->unit_of_measure,
             'status' => $a->status,
+            // Settlement queue: whether the line still owes a confirmation, and
+            // which operation answers for it (RQ-PA-265 A2a).
+            'settlement_state' => $a->settlement_state,
+            'settlement_reason' => $a->settlement_pending_reason,
+            'step_number' => $a->batchStep?->step_number,
+            'step_name' => $a->batchStep?->name,
             'allocated_qty' => (float) $a->allocated_qty,
             'consumed_qty' => (float) $a->consumed_qty,
             'scrap_qty' => (float) $a->scrap_qty,
             'returned_qty' => (float) $a->returned_qty,
+            // Who and when declared the consumption, and from where — the
+            // document behind the quantity (RQ-PA-265 A3). Corrections are
+            // carried too; the panel for them arrives with A5.
+            'consumption_recorded_by' => $a->consumptionRecordedBy?->name,
+            'consumption_recorded_at' => $a->consumption_recorded_at?->toISOString(),
+            'consumption_source' => $a->consumption_source,
+            'consumption_key' => $a->consumption_key,
+            'correction_recorded_by' => $a->correctionRecordedBy?->name,
+            'correction_recorded_at' => $a->correction_recorded_at?->toISOString(),
+            'correction_reason' => $a->correction_reason,
+            'correction_reference' => $a->correction_reference,
             'lots' => $a->lotPicks->map(fn ($p) => [
                 'lot_id' => $p->material_lot_id,
                 'lot_number' => $p->lot?->lot_number,
@@ -197,6 +225,9 @@ class WorkOrderManagementController extends Controller
             ])->values();
 
         $canReclassify = (bool) request()->user()?->hasAnyRole(['Supervisor', 'Admin']);
+        // A settled pilot consumption is corrected in review, under the plant's
+        // existing change-approval right (four eyes, RQ-PA-265 A5).
+        $canCorrectSettlement = (bool) request()->user()?->can('approve work order changes');
 
         $openStop = $workOrder->openStop();
         // An order held for a change may only resume once one has been applied — the
@@ -254,6 +285,7 @@ class WorkOrderManagementController extends Controller
                 'allocations' => $allocations,
             ],
             'canReclassify' => $canReclassify,
+            'canCorrectSettlement' => $canCorrectSettlement,
             'materials' => $canReclassify
                 ? Material::where('is_active', true)->orderBy('code')->get(['id', 'code', 'name'])
                 : [],
@@ -372,6 +404,9 @@ class WorkOrderManagementController extends Controller
                 (float) $request->validated('consumed_qty'),
                 (float) ($request->validated('scrap_qty') ?? 0),
                 $request->validated('notes'),
+                $request->user(),
+                MaterialAllocationService::SOURCE_OPERATOR,
+                $request->validated('idempotency_key'),
             );
 
             return back()->with('success', __('Consumption recorded'));

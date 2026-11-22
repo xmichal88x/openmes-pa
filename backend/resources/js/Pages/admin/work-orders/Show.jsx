@@ -98,6 +98,8 @@ export default function AdminWorkOrderShow() {
         // Change control (#182) and materials reconciliation (#99).
         stops = [], changeRequests = [], changeControl = {},
         canReclassify = false, materials = [], allocations = [], auth,
+        // Review right over a settled pilot consumption (RQ-PA-265 A5).
+        canCorrectSettlement = false,
     } = usePage().props;
     // UX only — UpdateWorkOrderRequest enforces `edit work orders`.
     const canEdit = !!auth?.user?.can?.editWorkOrders;
@@ -211,6 +213,7 @@ export default function AdminWorkOrderShow() {
                             workOrder={workOrder}
                             allocations={allocations}
                             canReclassify={canReclassify}
+                            canCorrectSettlement={canCorrectSettlement}
                             materials={materials}
                         />
                         <ChangeRequests items={changeRequests} />
@@ -834,10 +837,17 @@ const ALLOC_STATUS_STYLES = {
     returned: 'bg-om-chip text-om-faint',
 };
 
+// Why a line waits for settlement (RQ-PA-265). Translated at render: the module
+// is imported before the locale chunk is loaded.
+const settlementReasonLabel = (code) => ({
+    consumption_not_confirmed: __('Consumption not confirmed at the operation'),
+    operation_not_attributed: __('Operation not attributed'),
+}[code] ?? code);
+
 // Materials reconciliation panel (#99): per-allocation record-consumption, return
 // leftover and reclassify actions against the work order's pulled materials.
-function MaterialsReconciliation({ workOrder, allocations, canReclassify, materials }) {
-    const [modal, setModal] = useState(null); // { kind: 'consume'|'return'|'reclassify', alloc }
+function MaterialsReconciliation({ workOrder, allocations, canReclassify, canCorrectSettlement, materials }) {
+    const [modal, setModal] = useState(null); // { kind: 'consume'|'return'|'reclassify'|'correct', alloc }
 
     return (
         <div className="bg-om-card rounded-om border border-om-line overflow-hidden">
@@ -858,18 +868,59 @@ function MaterialsReconciliation({ workOrder, allocations, canReclassify, materi
                 bodyMaxHeight="none"
                 columns={[
                     { accessorKey: 'material_code', header: __('Material'), cell: ({ row }) => <span className="font-medium">{row.original.material_code}<span className="block text-xs text-om-muted">{row.original.material_name}</span></span> },
+                    { accessorKey: 'step_number', header: __('Step'), cell: ({ row }) => (row.original.step_number ? (
+                        <span className="font-mono" title={row.original.step_name ?? undefined}>{row.original.step_number}</span>
+                    ) : <span className="text-om-faint">—</span>) },
                     ...[['allocated_qty', 'Allocated'], ['consumed_qty', 'Consumed'], ['returned_qty', 'Returned'], ['scrap_qty', 'Scrap']].map(([key, label]) => ({
                         accessorKey: key, header: __(label), meta: { align: 'right' },
                         cell: ({ row }) => <span className="font-mono">{fmtQty(row.original[key])}</span>,
                     })),
                     { accessorKey: 'status', header: __('Status'), cell: ({ row }) => <span className={`inline-block px-2 py-0.5 rounded text-xs ${ALLOC_STATUS_STYLES[row.original.status] ?? 'bg-om-chip text-om-muted'}`}>{__(row.original.status)}</span> },
-                    { id: 'actions', header: __('Actions'), cell: ({ row }) => row.original.status === 'allocated' && (
-                        <div className="flex items-center gap-2">
-                            <Button size="sm" variant="outline" onClick={() => setModal({ kind: 'consume', alloc: row.original })}>{__('Consume')}</Button>
-                            <Button size="sm" variant="outline" onClick={() => setModal({ kind: 'return', alloc: row.original })}>{__('Return')}</Button>
-                            {canReclassify && <Button size="sm" variant="outline" onClick={() => setModal({ kind: 'reclassify', alloc: row.original })}>{__('Reclassify')}</Button>}
-                        </div>
-                    ) },
+                    // Settlement is its own fact: `allocated` still says nothing
+                    // about whether a retrieval was ever confirmed.
+                    { accessorKey: 'settlement_state', header: __('Settlement'), cell: ({ row }) => {
+                        const { settlement_state: state, settlement_reason: reason } = row.original;
+                        if (state === 'pending') {
+                            const text = settlementReasonLabel(reason);
+                            return (
+                                <span className="inline-block" title={text}>
+                                    <span className="inline-block rounded bg-om-blocked-bg px-2 py-0.5 text-xs text-om-blocked">
+                                        {__('Pending settlement')}
+                                    </span>
+                                    {text && <span className="mt-0.5 block text-xs text-om-muted">{text}</span>}
+                                </span>
+                            );
+                        }
+                        if (state === 'settled') {
+                            return <span className="inline-block rounded bg-om-running-bg px-2 py-0.5 text-xs text-om-running">{__('Settled')}</span>;
+                        }
+
+                        return <span className="text-om-faint">—</span>;
+                    } },
+                    { id: 'actions', header: __('Actions'), cell: ({ row }) => {
+                        // An open line is reconciled at the machine; a settled pilot
+                        // line is corrected in review instead (RQ-PA-265 A5).
+                        const isOpen = row.original.status === 'allocated';
+                        // Only a consumed settlement has a confirmation to correct;
+                        // a returned line has nothing to review.
+                        const canCorrect = canCorrectSettlement
+                            && row.original.settlement_state === 'settled'
+                            && row.original.status === 'consumed';
+                        if (!isOpen && !canCorrect) return null;
+
+                        return (
+                            <div className="flex items-center gap-2">
+                                {isOpen && (
+                                    <>
+                                        <Button size="sm" variant="outline" onClick={() => setModal({ kind: 'consume', alloc: row.original })}>{__('Consume')}</Button>
+                                        <Button size="sm" variant="outline" onClick={() => setModal({ kind: 'return', alloc: row.original })}>{__('Return')}</Button>
+                                        {canReclassify && <Button size="sm" variant="outline" onClick={() => setModal({ kind: 'reclassify', alloc: row.original })}>{__('Reclassify')}</Button>}
+                                    </>
+                                )}
+                                {canCorrect && <Button size="sm" variant="outline" onClick={() => setModal({ kind: 'correct', alloc: row.original })}>{__('Correct')}</Button>}
+                            </div>
+                        );
+                    } },
                 ]}
             />
 
@@ -881,6 +932,9 @@ function MaterialsReconciliation({ workOrder, allocations, canReclassify, materi
             )}
             {modal?.kind === 'reclassify' && (
                 <ReclassifyModal workOrder={workOrder} alloc={modal.alloc} materials={materials} onClose={() => setModal(null)} />
+            )}
+            {modal?.kind === 'correct' && (
+                <CorrectModal alloc={modal.alloc} onClose={() => setModal(null)} />
             )}
         </div>
     );
@@ -912,6 +966,79 @@ function ModalActions({ onClose, submitLabel, disabled }) {
                 {submitLabel}
             </button>
         </div>
+    );
+}
+
+// A settled pilot consumption is corrected by a reviewer, never edited: the
+// original confirmation stays on record and only the difference is booked as a
+// compensating movement (RQ-PA-265 A5). The reason and the reference to the
+// document being corrected are required — a correction has to stay explainable.
+function CorrectModal({ alloc, onClose }) {
+    const [consumed, setConsumed] = useState(String(alloc.consumed_qty ?? ''));
+    const [scrap, setScrap] = useState(String(alloc.scrap_qty ?? ''));
+    const [reason, setReason] = useState('');
+    const [reference, setReference] = useState('');
+    const [error, setError] = useState(null);
+    const [processing, setProcessing] = useState(false);
+
+    async function submit(e) {
+        e.preventDefault();
+        if (processing) return;
+        setProcessing(true);
+        setError(null);
+
+        try {
+            const res = await apiCall(`/api/v1/material-allocations/${alloc.id}/correct`, 'POST', {
+                consumed_qty: consumed,
+                scrap_qty: scrap || 0,
+                reason,
+                reference,
+            });
+            const json = await res.json().catch(() => ({}));
+
+            if (!res.ok) {
+                setError(json.message ?? __('Request failed'));
+                setProcessing(false);
+                return;
+            }
+
+            router.reload();
+        } catch {
+            setError(__('Request failed'));
+            setProcessing(false);
+        }
+    }
+
+    return (
+        <ModalFrame title={__('Correct settled consumption')}>
+            <form onSubmit={submit}>
+                <p className="text-xs text-om-muted mb-3">
+                    {__('The original confirmation stays on record; only the difference is booked.')}
+                </p>
+                <div className="mb-3">
+                    <div className={labelCls}>{__('Consumed quantity')}</div>
+                    <input aria-label={__('Consumed quantity')} type="number" step="0.0001" min="0" value={consumed}
+                        onChange={(e) => setConsumed(e.target.value)} className={fieldCls} required />
+                </div>
+                <div className="mb-3">
+                    <div className={labelCls}>{__('Scrap quantity')}</div>
+                    <input aria-label={__('Scrap quantity')} type="number" step="0.0001" min="0" value={scrap}
+                        onChange={(e) => setScrap(e.target.value)} className={fieldCls} />
+                </div>
+                <div className="mb-3">
+                    <div className={labelCls}>{__('Reason')}</div>
+                    <input aria-label={__('Reason')} type="text" minLength={3} maxLength={255} value={reason}
+                        onChange={(e) => setReason(e.target.value)} className={fieldCls} required />
+                </div>
+                <div className="mb-1">
+                    <div className={labelCls}>{__('Reference')}</div>
+                    <input aria-label={__('Reference')} type="text" maxLength={64} value={reference}
+                        onChange={(e) => setReference(e.target.value)} className={fieldCls} required />
+                </div>
+                {error && <p className="mt-3 text-sm text-om-blocked">{error}</p>}
+                <ModalActions onClose={onClose} submitLabel={__('Correct')} disabled={processing} />
+            </form>
+        </ModalFrame>
     );
 }
 

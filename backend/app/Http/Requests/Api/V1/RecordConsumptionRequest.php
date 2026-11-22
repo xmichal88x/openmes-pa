@@ -28,6 +28,9 @@ class RecordConsumptionRequest extends FormRequest
             'consumed_qty' => ['required', 'numeric', 'min:0'],
             'scrap_qty' => ['nullable', 'numeric', 'min:0'],
             'notes' => ['nullable', 'string', 'max:1000'],
+            // Optional: a retried request carrying the same key is the same
+            // confirmation, not a second booking (RQ-PA-265 A3).
+            'idempotency_key' => ['nullable', 'string', 'max:64'],
         ];
     }
 }

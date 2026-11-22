@@ -23,6 +23,12 @@ final class StockMovementReason
         'Batch #:batch cancelled — return to stock' => ['batch'],
         'Adjustment on batch #:batch' => ['batch'],
         'Batch #:batch — unused material returned to stock' => ['batch'],
+        // The operation retrieved more than the batch withdrew: the excess left
+        // the store unannounced and is booked as consumption of its own.
+        'Unplanned consumption above the allocation — batch #:batch' => ['batch'],
+        // A settled consumption was corrected by a reviewer: the compensating
+        // movement names the document it corrects and why.
+        'Correction of material consumption (:reference): :reason' => ['reference', 'reason'],
     ];
 
     /** The English note stored on the movement. */
@@ -41,9 +47,11 @@ final class StockMovementReason
         }
 
         foreach (self::TEMPLATES as $template => $names) {
-            // Quote the literal text between placeholders; each placeholder becomes a numeric capture.
+            // Quote the literal text between placeholders; each placeholder becomes a capture.
+            // Captures are text, not digits: a correction carries a reference and a
+            // reason, and neither is guaranteed to be a number.
             $literals = array_map(fn ($part) => preg_quote($part, '/'), preg_split('/:\w+/', $template));
-            $pattern = '/^'.implode('(\d+)', $literals).'$/u';
+            $pattern = '/^'.implode('(.+?)', $literals).'$/u';
             if (preg_match($pattern, $reason, $m)) {
                 return __($template, array_combine($names, array_slice($m, 1)));
             }

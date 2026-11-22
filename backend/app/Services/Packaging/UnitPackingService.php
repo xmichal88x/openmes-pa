@@ -189,7 +189,13 @@ class UnitPackingService
                 }
                 $allocation = MaterialAllocation::where('batch_id', $step->batch_id)->where('material_id', $line['material_id'])->first();
                 if ($allocation) {
-                    $this->allocations->recordConsumption($allocation, min((float) $allocation->allocated_qty, $line['consumed_qty'] + $line['quantity_per_basis']), (float) $allocation->scrap_qty);
+                    $this->allocations->recordConsumption(
+                        $allocation,
+                        min((float) $allocation->allocated_qty, $line['consumed_qty'] + $line['quantity_per_basis']),
+                        (float) $allocation->scrap_qty,
+                        user: null,
+                        source: MaterialAllocationService::SOURCE_SYSTEM,
+                    );
                 }
             }
         } catch (\Throwable $e) {

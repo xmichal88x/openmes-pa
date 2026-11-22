@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Concerns\HasTenant;
+use App\Services\Material\MaterialSettlementPolicy;
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -32,6 +33,20 @@ class MaterialAllocation extends Model
         'returned_qty',
         'consumed_qty',
         'consumption_recorded',
+        // Evidence of the confirmation: who, when, from where, and the key that
+        // makes a retried request the same document (RQ-PA-265 A3).
+        'consumption_recorded_by_id',
+        'consumption_recorded_at',
+        'consumption_source',
+        'consumption_key',
+        // Correction evidence, written by the correction path (RQ-PA-265 A5).
+        'correction_recorded_by_id',
+        'correction_recorded_at',
+        'correction_reason',
+        'correction_reference',
+        // Idempotency of the correction itself: a retried request is the same
+        // document, never a second compensation.
+        'correction_key',
         // How much of it has already been taken off that location's balance.
         'location_deducted_qty',
         'adjustment_qty',
@@ -53,6 +68,8 @@ class MaterialAllocation extends Model
             'returned_qty' => 'decimal:4',
             'consumed_qty' => 'decimal:4',
             'consumption_recorded' => 'boolean',
+            'consumption_recorded_at' => 'datetime',
+            'correction_recorded_at' => 'datetime',
             'location_deducted_qty' => 'decimal:4',
             'adjustment_qty' => 'decimal:4',
             'scrap_qty' => 'decimal:4',
@@ -71,9 +88,30 @@ class MaterialAllocation extends Model
         return (float) $this->consumed_qty - (float) $this->expected_qty;
     }
 
+    /**
+     * Where this allocation stands in the settlement queue: `pending` while a
+     * retrieval or an operation is still missing, `settled` once closed.
+     */
+    public function getSettlementStateAttribute(): string
+    {
+        return app(MaterialSettlementPolicy::class)->state($this);
+    }
+
+    /** Why the allocation waits for settlement, or null when it does not. */
+    public function getSettlementPendingReasonAttribute(): ?string
+    {
+        return app(MaterialSettlementPolicy::class)->pendingReason($this);
+    }
+
     public function batch(): BelongsTo
     {
         return $this->belongsTo(Batch::class);
+    }
+
+    /** The operation that answers for this allocation's withdrawal. */
+    public function batchStep(): BelongsTo
+    {
+        return $this->belongsTo(BatchStep::class);
     }
 
     public function material(): BelongsTo
@@ -89,6 +127,18 @@ class MaterialAllocation extends Model
     public function allocatedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'allocated_by');
+    }
+
+    /** The person who declared the consumption (pilot: the operation's operator). */
+    public function consumptionRecordedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'consumption_recorded_by_id');
+    }
+
+    /** The person who corrected a settled consumption, if anyone did. */
+    public function correctionRecordedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'correction_recorded_by_id');
     }
 
     /** The location this allocation's consumption is booked against. */

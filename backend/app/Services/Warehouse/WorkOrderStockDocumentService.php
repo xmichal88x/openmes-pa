@@ -6,6 +6,7 @@ use App\Models\BatchStepLotConsumption;
 use App\Models\StockDocument;
 use App\Models\Warehouse;
 use App\Models\WorkOrder;
+use App\Services\Material\MaterialSettlementPolicy;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -22,7 +23,10 @@ use Illuminate\Support\Facades\Log;
  */
 class WorkOrderStockDocumentService
 {
-    public function __construct(private StockDocumentService $documents) {}
+    public function __construct(
+        private StockDocumentService $documents,
+        private MaterialSettlementPolicy $settlement,
+    ) {}
 
     /**
      * Create the draft documents a completed work order implies. Idempotent: an
@@ -69,20 +73,34 @@ class WorkOrderStockDocumentService
             return null;
         }
 
-        $lines = $this->consumedLines($workOrder);
+        $consumed = $this->consumedLines($workOrder);
+        $lines = $consumed['lines'];
+        $excluded = $consumed['excluded'];
 
         if ($lines === []) {
-            $lines = $this->bomLines($workOrder, $quantity ?? $this->producedQuantity($workOrder));
+            $planned = $this->bomLines($workOrder, $quantity ?? $this->producedQuantity($workOrder));
+            $lines = $planned['lines'];
+            $excluded = $planned['excluded'];
         }
 
         if ($lines === []) {
             return null;
         }
 
+        $notes = __('Material released for work order :order', ['order' => $workOrder->order_no]);
+
+        // Named, not silently missing: the keeper has to know that part of what
+        // the recipe lists is booked by the operation itself.
+        if ($excluded !== []) {
+            $notes .= "\n".__('Components settled by their production operation are excluded here: :codes', [
+                'codes' => implode(', ', $excluded),
+            ]);
+        }
+
         return $this->documents->createDraft([
             'type' => StockDocument::TYPE_MATERIAL_ISSUE,
             'work_order_id' => $workOrder->id,
-            'notes' => __('Material released for work order :order', ['order' => $workOrder->order_no]),
+            'notes' => $notes,
             'lines' => $lines,
         ]);
     }
@@ -132,9 +150,10 @@ class WorkOrderStockDocumentService
 
     /**
      * Actual consumption recorded against the order's batch steps, one line per
-     * (material, lot) so the release keeps lot traceability.
+     * (material, lot) so the release keeps lot traceability. Lines whose
+     * settlement belongs to their operation are dropped and reported by code.
      *
-     * @return array<int, array<string, mixed>>
+     * @return array{lines: array<int, array<string, mixed>>, excluded: array<int, string>}
      */
     private function consumedLines(WorkOrder $workOrder): array
     {
@@ -144,11 +163,18 @@ class WorkOrderStockDocumentService
             ->get();
 
         $lines = [];
+        $excluded = [];
 
         foreach ($rows as $row) {
             $lot = $row->materialLot;
 
             if (! $lot || ! $lot->material) {
+                continue;
+            }
+
+            if ($this->settledByOperation($workOrder, (int) $lot->material_id)) {
+                $excluded[$lot->material->code] = true;
+
                 continue;
             }
 
@@ -165,19 +191,20 @@ class WorkOrderStockDocumentService
             $lines[$key]['quantity'] += (float) $row->quantity_consumed;
         }
 
-        return array_values($lines);
+        return ['lines' => array_values($lines), 'excluded' => array_keys($excluded)];
     }
 
     /**
      * Planned consumption from the order's BOM(s): quantity per unit (plus its
-     * scrap allowance) times the quantity produced.
+     * scrap allowance) times the quantity produced, minus what the operation
+     * settles on its own.
      *
-     * @return array<int, array<string, mixed>>
+     * @return array{lines: array<int, array<string, mixed>>, excluded: array<int, string>}
      */
     private function bomLines(WorkOrder $workOrder, float $quantity): array
     {
         if ($quantity <= 0) {
-            return [];
+            return ['lines' => [], 'excluded' => []];
         }
 
         try {
@@ -198,14 +225,21 @@ class WorkOrderStockDocumentService
                 'error' => $e->getMessage(),
             ]);
 
-            return [];
+            return ['lines' => [], 'excluded' => []];
         }
 
         $lines = [];
+        $excluded = [];
 
         foreach ($templates as $template) {
             foreach ($template->bomItems as $item) {
                 if (! $item->material) {
+                    continue;
+                }
+
+                if ($this->settledByOperation($workOrder, (int) $item->material_id)) {
+                    $excluded[$item->material->code] = true;
+
                     continue;
                 }
 
@@ -220,6 +254,12 @@ class WorkOrderStockDocumentService
             }
         }
 
-        return array_values($lines);
+        return ['lines' => array_values($lines), 'excluded' => array_keys($excluded)];
+    }
+
+    /** Is this component's withdrawal somebody else's to book? */
+    private function settledByOperation(WorkOrder $workOrder, int $materialId): bool
+    {
+        return $this->settlement->modeFor($workOrder, $materialId) === MaterialSettlementPolicy::MODE_OPERATION;
     }
 }

@@ -224,7 +224,7 @@ class OperationMaterialEligibilityTest extends TestCase
 
         $movementsBefore = $this->materialMovementIds();
 
-        app(MaterialAllocationService::class)->recordConsumption($allocation, 7.0, 1.0);
+        app(MaterialAllocationService::class)->recordConsumption($allocation, 7.0, 1.0, null, $this->operator);
 
         $fresh = $allocation->fresh();
         $this->assertTrue((bool) $fresh->consumption_recorded);
@@ -253,7 +253,7 @@ class OperationMaterialEligibilityTest extends TestCase
         $allocation = $this->allocation($batch);
         $this->assertStock(90.0);
 
-        app(MaterialAllocationService::class)->recordConsumption($allocation, 8.0, 2.0);
+        app(MaterialAllocationService::class)->recordConsumption($allocation, 8.0, 2.0, null, $this->operator);
         app(MaterialAllocationService::class)->consumeForBatch($batch);
 
         // 8 used + 2 scrapped = the whole 10 that was already taken at
@@ -284,7 +284,7 @@ class OperationMaterialEligibilityTest extends TestCase
         $this->startCutting($batch);
 
         $allocation = $this->allocation($batch);
-        app(MaterialAllocationService::class)->recordConsumption($allocation, 8.0, 2.0);
+        app(MaterialAllocationService::class)->recordConsumption($allocation, 8.0, 2.0, null, $this->operator);
         app(MaterialAllocationService::class)->consumeForBatch($batch);
 
         $stockAfterSettlement = $this->stock();
@@ -325,7 +325,7 @@ class OperationMaterialEligibilityTest extends TestCase
         $this->assertStock(89.0);
         $this->assertEqualsWithDelta(11.0, (float) $allocation->fresh()->allocated_qty, 0.0001);
 
-        app(MaterialAllocationService::class)->recordConsumption($allocation->fresh(), 11.0, 0);
+        app(MaterialAllocationService::class)->recordConsumption($allocation->fresh(), 11.0, 0, null, $this->operator);
         app(MaterialAllocationService::class)->consumeForBatch($batch);
 
         // The extra piece was already booked by the adjustment: settling the

@@ -726,6 +726,14 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     // material to stock against a work-order allocation (production users).
     Route::post('/material-allocations/{allocation}/consume', [\App\Http\Controllers\Api\V1\MaterialAllocationController::class, 'consume']);
     Route::post('/material-allocations/{allocation}/return', [\App\Http\Controllers\Api\V1\MaterialAllocationController::class, 'return']);
+    // Explicit settlement of a pilot line (RQ-PA-265 A3): posts the confirmation
+    // the consuming operation declared, or refuses with the reason it is missing.
+    Route::post('/material-allocations/{allocation}/settle', [\App\Http\Controllers\Api\V1\MaterialAllocationController::class, 'settle']);
+    // Correction of a settled pilot line (RQ-PA-265 A5): four-eyes review under
+    // the plant's existing right to approve work order changes — the author of
+    // the confirmation cannot approve the correction of their own number.
+    Route::middleware('permission:approve work order changes')
+        ->post('/material-allocations/{allocation}/correct', [\App\Http\Controllers\Api\V1\MaterialAllocationController::class, 'correct']);
     // Reclassification (#99): regrade between material classes / change a lot status.
     Route::middleware('role:Supervisor|Admin')->group(function () {
         Route::post('/material-reclassifications/class', [\App\Http\Controllers\Api\V1\MaterialReclassificationController::class, 'class']);
