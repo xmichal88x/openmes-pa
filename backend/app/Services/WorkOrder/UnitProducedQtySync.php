@@ -8,6 +8,7 @@ use App\Models\SerialUnit;
 use App\Models\User;
 use App\Models\WorkOrder;
 use App\Support\ProductionFlow;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -16,7 +17,7 @@ use Illuminate\Support\Facades\Log;
  *
  * A unit event is a physical fact, so it always lands - this class never
  * refuses it. Only the numbers that follow from a declared source are
- * re-derived, in the caller's transaction:
+ * re-derived, in one transaction with the event:
  *
  * | batch source      | what happens                                              |
  * |-------------------|-----------------------------------------------------------|
@@ -63,7 +64,36 @@ class UnitProducedQtySync
      */
     public function afterStatusChange(SerialUnit $unit, string $event, ?User $actor = null): array
     {
-        $workOrder = $unit->workOrder;
+        // Every caller today already runs in a transaction (`SerialTraceService`
+        // wraps each unit event), so this is a savepoint there and changes
+        // nothing. It is here for the future caller: `lockForUpdate()` outside a
+        // transaction locks nothing at all, and this method would then read the
+        // rollup of an order somebody else is writing.
+        return DB::transaction(fn (): array => $this->lockedStatusChange($unit, $event, $actor));
+    }
+
+    /**
+     * @return array<int, array{code: string, message: string}>
+     */
+    private function lockedStatusChange(SerialUnit $unit, string $event, ?User $actor): array
+    {
+        // RQ-PA-272: this is the only write of `work_orders.produced_qty` that
+        // re-derives the figure from every batch of the order, so it has to
+        // serialise on the order row. Two scrap/re-cut events on units of
+        // different batches of one order used to read the rollup in parallel and
+        // write it back twice: the second write dropped the first (lost update).
+        //
+        // Lock order: `serial_units` -> `work_orders`. The callers lock the unit
+        // first where they lock it at all (`SerialTraceService::blockUnit()/
+        // unblockUnit()`; `scrapUnit()/recutUnit()` only read it), and no path in
+        // the app takes the order and then a unit - the quantity paths in
+        // `BatchService`, `WorkOrderService`, `MachineCounterService` and
+        // `Packaging*` go from the order to step/box/pallet rows - so this order
+        // cannot deadlock.
+        $workOrder = $unit->work_order_id === null
+            ? null
+            : WorkOrder::whereKey($unit->work_order_id)->lockForUpdate()->first();
+
         $batch = $unit->batch;
         $warnings = [];
 
@@ -80,7 +110,9 @@ class UnitProducedQtySync
         }
 
         try {
-            $total = $this->rollup->recompute($workOrder->fresh());
+            // The row read above is under the lock, so it is the current one -
+            // re-reading it here would only be a second look at the same values.
+            $total = $this->rollup->recompute($workOrder);
         } catch (\DomainException $e) {
             // The order keeps the figure it had: a gap elsewhere is not a reason
             // to invent one here.
