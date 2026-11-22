@@ -2,6 +2,7 @@
 
 namespace App\Services\Settings;
 
+use App\Exceptions\PalletBackflushImportRefusedException;
 use App\Http\Requests\UpdateSystemSettingsRequest;
 use App\Support\TimezoneRegistry;
 use Illuminate\Support\Facades\DB;
@@ -32,7 +33,8 @@ use Illuminate\Support\Facades\Validator;
  *    values are stored the way the form stores them (JSON), so
  *    `"language": "pl"` and the export's `"language": "\"pl\""` both work.
  *    The production flow mode is never taken from a file; the plant timezone
- *    only when it is a valid zone, and it applies at once.
+ *    only when it is a valid zone, and it applies at once. A file that switches
+ *    on pallet backflush is refused whole, not imported with the value dropped.
  */
 class ConfigurationImporter
 {
@@ -164,6 +166,11 @@ class ConfigurationImporter
         $count = 0;
         foreach ($settings as $key => $value) {
             $key = (string) $key;
+            // A switch the plant does not have: refused, never dropped quietly,
+            // because a file asking for it is a mistake the admin must see.
+            if (strtolower($key) === PalletBackflushImportRefusedException::KEY && self::flag($value)) {
+                throw new PalletBackflushImportRefusedException;
+            }
             if ($key === TimezoneRegistry::SETTING_KEY) {
                 // Only a zone the settings form offers, stored the way it stores
                 // it - and in force for the rest of this request (a scenario in
@@ -208,6 +215,23 @@ class ConfigurationImporter
         }
 
         return Validator::make([$key => $value], $rules)->passes();
+    }
+
+    /**
+     * A stored setting read as a boolean, whichever way the file spells it:
+     * `true`, `1`, `"1"`, `"true"`, or the export's text of a text (`"\"true\""`).
+     */
+    private static function flag(mixed $value): bool
+    {
+        for ($i = 0; $i < 2 && is_string($value); $i++) {
+            $decoded = json_decode($value, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                break;
+            }
+            $value = $decoded;
+        }
+
+        return filter_var($value, FILTER_VALIDATE_BOOLEAN);
     }
 
     /** A setting as the form stores it: JSON text. An exported value already is. */

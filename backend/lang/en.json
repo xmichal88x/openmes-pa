@@ -7406,5 +7406,9 @@
     "I record this as a quality decision — missing quantity: :qty pcs": "I record this as a quality decision — missing quantity: :qty pcs",
     "Closing…": "Closing…",
     "Work order closed short.": "Work order closed short.",
-    "Short close failed": "Short close failed"
+    "Short close failed": "Short close failed",
+    "Automatic material booking from pallets is disabled; set this to false. Raw material is settled once by the operation that consumes it.": "Automatic material booking from pallets is disabled; set this to false. Raw material is settled once by the operation that consumes it.",
+    "Material booking from pallets is disabled; packing works normally. Raw material is settled once by the operation that consumes it.": "Material booking from pallets is disabled; packing works normally. Raw material is settled once by the operation that consumes it.",
+    "The stored value \"true\" is not effective: this policy is enforced in code.": "The stored value \"true\" is not effective: this policy is enforced in code.",
+    "Material booking from pallets is disabled; packing works normally. You do not have to do anything.": "Material booking from pallets is disabled; packing works normally. You do not have to do anything."
 }

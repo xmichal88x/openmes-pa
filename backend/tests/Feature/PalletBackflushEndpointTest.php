@@ -13,9 +13,10 @@ use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
 /**
- * Milestone backflush at the packaging station: creating a pallet declares and
- * deducts the BOM consumption for the produced quantity when the configurable
- * trigger is enabled, and is a no-op when it is off (the default).
+ * Milestone backflush at the packaging station is disabled by force: raw
+ * material is settled once by the operation that consumes it, so creating a
+ * pallet never writes a stock movement - not even when the historical
+ * `backflush_on_pallet_creation` setting still stores true.
  */
 class PalletBackflushEndpointTest extends TestCase
 {
@@ -50,26 +51,38 @@ class PalletBackflushEndpointTest extends TestCase
         ]);
     }
 
-    public function test_creating_a_pallet_backflushes_when_enabled(): void
+    public function test_creating_a_pallet_never_backflushes_even_when_setting_is_true(): void
     {
         $this->enableBackflush();
         $material = Material::factory()->create(['stock_quantity' => 1000]);
         $wo = $this->workOrderConsuming($material);
 
-        $this->actingAs($this->admin)
+        $movementsBefore = StockMovement::orderBy('id')->pluck('id')->all();
+        $stockBefore = (float) $material->fresh()->stock_quantity;
+
+        $response = $this->actingAs($this->admin)
             ->postJson(route('packaging.pallets.create'), ['work_order_id' => $wo->id, 'produced_qty' => 100])
             ->assertCreated();
 
-        // 100 * 2.0 * 1.05 = 210 deducted.
-        $this->assertEqualsWithDelta(790.0, (float) $material->fresh()->stock_quantity, 0.0001);
+        // The policy is stated as information, not as a warning: the operator
+        // packs on and nothing is booked.
+        $response
+            ->assertJsonPath('material_backflush.status', 'disabled')
+            ->assertJsonPath('material_backflush.code', 'backflush_disabled_pending_reconciliation')
+            ->assertJsonPath('material_backflush.reason', 'raw_material_settled_by_operation');
+        $this->assertArrayNotHasKey('warning', $response->json());
+
+        // No raw material is deducted at pallet creation.
+        $this->assertEqualsWithDelta(1000.0, (float) $material->fresh()->stock_quantity, 0.0001);
+        $this->assertSame(0, StockMovement::where('source_type', StockMovement::SOURCE_PALLET)->count());
+        $this->assertSame(0, StockMovement::count());
+
+        // Baseline held: the same movements and the same balance as before.
+        $this->assertSame($movementsBefore, StockMovement::orderBy('id')->pluck('id')->all());
+        $this->assertEqualsWithDelta($stockBefore, (float) $material->fresh()->stock_quantity, 0.0001);
 
         $pallet = Pallet::where('work_order_id', $wo->id)->firstOrFail();
-        $this->assertDatabaseHas('stock_movements', [
-            'source_type' => StockMovement::SOURCE_PALLET,
-            'source_id' => $pallet->id,
-            'movement_type' => StockMovement::TYPE_CONSUME,
-        ]);
-        $this->assertTrue($pallet->stockMovements()->exists());
+        $this->assertFalse($pallet->stockMovements()->exists());
     }
 
     public function test_creating_a_pallet_does_not_backflush_when_disabled(): void

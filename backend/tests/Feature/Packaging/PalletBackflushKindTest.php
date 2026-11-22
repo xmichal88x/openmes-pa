@@ -16,8 +16,9 @@ use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
 /**
- * R07-15 milestone backflush: loose pallets keep the create-time behaviour,
- * boxes pallets consume their box-derived qty only when closed - once.
+ * R07-15 by pallet kind, under the forced-off backflush policy: raw material is
+ * settled once by the consuming operation, so no pallet kind (loose or boxes,
+ * created, closed, scanned or reopened) may ever write a stock movement.
  */
 class PalletBackflushKindTest extends TestCase
 {
@@ -63,13 +64,16 @@ class PalletBackflushKindTest extends TestCase
         ]);
     }
 
-    public function test_a_loose_pallet_still_backflushes_on_creation(): void
+    public function test_a_loose_pallet_never_backflushes_on_creation(): void
     {
         $this->enableBackflush();
         $material = Material::factory()->create(['stock_quantity' => 1000]);
         $wo = $this->workOrderConsuming($material);
 
-        $this->actingAs($this->admin)
+        $movementsBefore = StockMovement::orderBy('id')->pluck('id')->all();
+        $stockBefore = (float) $material->fresh()->stock_quantity;
+
+        $response = $this->actingAs($this->admin)
             ->postJson(route('packaging.pallets.create'), [
                 'work_order_id' => $wo->id,
                 'kind' => Pallet::KIND_LOOSE,
@@ -77,11 +81,21 @@ class PalletBackflushKindTest extends TestCase
             ])
             ->assertCreated();
 
-        $this->assertEqualsWithDelta(790.0, (float) $material->fresh()->stock_quantity, 0.0001);
-        $this->assertSame(1, StockMovement::where('movement_type', StockMovement::TYPE_CONSUME)->count());
+        // The disabled policy travels as a plain status, never as a warning.
+        $response
+            ->assertJsonPath('material_backflush.status', 'disabled')
+            ->assertJsonPath('material_backflush.code', 'backflush_disabled_pending_reconciliation')
+            ->assertJsonPath('material_backflush.reason', 'raw_material_settled_by_operation');
+        $this->assertArrayNotHasKey('warning', $response->json());
+
+        // Creating a loose pallet books no raw material.
+        $this->assertEqualsWithDelta(1000.0, (float) $material->fresh()->stock_quantity, 0.0001);
+        $this->assertSame(0, StockMovement::count());
+        $this->assertSame($movementsBefore, StockMovement::orderBy('id')->pluck('id')->all());
+        $this->assertEqualsWithDelta($stockBefore, (float) $material->fresh()->stock_quantity, 0.0001);
     }
 
-    public function test_a_boxes_pallet_backflushes_on_close_from_its_qty_and_only_once(): void
+    public function test_a_boxes_pallet_does_not_backflush_on_close_but_closes_once(): void
     {
         $this->enableBackflush();
         $material = Material::factory()->create(['stock_quantity' => 1000]);
@@ -111,21 +125,29 @@ class PalletBackflushKindTest extends TestCase
         $this->assertSame(2, $pallet->fresh()->qty);
         $this->assertSame(0, StockMovement::count(), 'Adding boxes and scanning must not backflush.');
 
+        $movementsBefore = StockMovement::orderBy('id')->pluck('id')->all();
+        $stockBefore = (float) $material->fresh()->stock_quantity;
+
         $this->actingAs($this->admin)
             ->postJson(route('packaging.pallets.close', $pallet))
-            ->assertOk();
+            ->assertOk()
+            ->assertJsonPath('material_backflush.status', 'disabled')
+            ->assertJsonPath('material_backflush.code', 'backflush_disabled_pending_reconciliation')
+            ->assertJsonPath('material_backflush.reason', 'raw_material_settled_by_operation');
 
-        // 2 parts * 2.0 * 1.05 = 4.2 deducted exactly once.
-        $this->assertEqualsWithDelta(995.8, (float) $material->fresh()->stock_quantity, 0.0001);
-        $this->assertSame(1, StockMovement::where('movement_type', StockMovement::TYPE_CONSUME)->count());
-        $this->assertTrue($pallet->fresh()->stockMovements()->exists());
+        $this->assertSame($movementsBefore, StockMovement::orderBy('id')->pluck('id')->all());
+        $this->assertEqualsWithDelta($stockBefore, (float) $material->fresh()->stock_quantity, 0.0001);
+
+        // Closing the boxes pallet still works, but books no raw material.
+        $this->assertEqualsWithDelta(1000.0, (float) $material->fresh()->stock_quantity, 0.0001);
+        $this->assertSame(0, StockMovement::count());
 
         $this->actingAs($this->admin)
             ->postJson(route('packaging.pallets.close', $pallet))
             ->assertStatus(422);
 
-        $this->assertEqualsWithDelta(995.8, (float) $material->fresh()->stock_quantity, 0.0001);
-        $this->assertSame(1, StockMovement::where('movement_type', StockMovement::TYPE_CONSUME)->count());
+        $this->assertEqualsWithDelta(1000.0, (float) $material->fresh()->stock_quantity, 0.0001);
+        $this->assertSame(0, StockMovement::count());
     }
 
     public function test_an_empty_boxes_pallet_does_not_backflush_the_batch_on_close(): void

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Web;
 
+use App\Exceptions\PalletBackflushImportRefusedException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ImportSettingsRequest;
 use App\Http\Requests\UpdateProductionTargetsRequest;
@@ -140,7 +141,17 @@ class SettingsController extends Controller
             'telemetry_last_status' => json_decode($rows['telemetry_last_status']?->value ?? 'null', true),
             'force_sequential_steps' => json_decode($rows['force_sequential_steps']?->value ?? 'true', true) ?? true,
             'workstation_routing_enabled' => json_decode($rows['workstation_routing_enabled']?->value ?? 'false', true) ?? false,
-            'backflush_on_pallet_creation' => json_decode($rows['backflush_on_pallet_creation']?->value ?? 'false', true) ?? false,
+            // Named policy, not a fallback: the pallet backflush switch is
+            // retired (RQ-PA-265) and can no longer be switched on, so the page
+            // always reports the effective OFF state. The historical stored
+            // value travels separately, for diagnostics only.
+            'backflush_on_pallet_creation' => false,
+            'backflush_on_pallet_creation_stored' => app(\App\Services\Production\PalletBackflushService::class)->configuredEnabled(),
+            'material_backflush' => [
+                'status' => 'disabled',
+                'code' => \App\Exceptions\PalletBackflushDisabledException::CODE,
+                'reason' => 'raw_material_settled_by_operation',
+            ],
             'hold_on_material_shortage' => json_decode($rows['hold_on_material_shortage']?->value ?? 'false', true) ?? false,
             'pallet_stock_documents' => \App\Services\Warehouse\PalletStockDocumentService::mode(),
             'lot_tracking_enabled' => json_decode($rows['lot_tracking_enabled']?->value ?? 'false', true) ?? false,
@@ -606,7 +617,10 @@ class SettingsController extends Controller
             'allow_overproduction' => (bool) ($validated['allow_overproduction'] ?? false),
             'force_sequential_steps' => (bool) ($validated['force_sequential_steps'] ?? false),
             'workstation_routing_enabled' => (bool) ($validated['workstation_routing_enabled'] ?? false),
-            'backflush_on_pallet_creation' => (bool) ($validated['backflush_on_pallet_creation'] ?? false),
+            // Written only when the field was submitted, and always `false` -
+            // a `true` never gets this far, the form request rejects it. Saving
+            // an unrelated tab must not quietly rewrite the stored value.
+            ...($request->has('backflush_on_pallet_creation') ? ['backflush_on_pallet_creation' => false] : []),
             'hold_on_material_shortage' => (bool) ($validated['hold_on_material_shortage'] ?? false),
             'pallet_stock_documents' => $validated['pallet_stock_documents'] ?? \App\Services\Warehouse\PalletStockDocumentService::mode(),
             'lot_tracking_enabled' => (bool) ($validated['lot_tracking_enabled'] ?? false),
@@ -784,6 +798,15 @@ class SettingsController extends Controller
                 ? __(':count configuration items imported successfully.', ['count' => $imported])
                 : __('Imported :count configuration items and replayed :events production events.', ['count' => $imported, 'events' => $events]));
         } catch (ScenarioException $e) {
+            // A client that asked for JSON (an API call, not the admin form) gets
+            // the refusal as a validation-style 422 with the key it must fix.
+            if ($e instanceof PalletBackflushImportRefusedException && $request->expectsJson()) {
+                return response()->json([
+                    'message' => $e->getMessage(),
+                    'errors' => ['settings_file' => [$e->getMessage()]],
+                ], 422);
+            }
+
             return back()->with('error', __('The production scenario was not imported - nothing from the file was saved. :message', ['message' => $e->getMessage()]));
         } catch (\Throwable $e) {
             // Logged when the log can be written; a broken log must not turn the

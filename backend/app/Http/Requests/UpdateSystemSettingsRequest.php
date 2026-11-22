@@ -57,7 +57,18 @@ class UpdateSystemSettingsRequest extends FormRequest
             'telemetry_enabled' => 'sometimes|boolean',
             'force_sequential_steps' => 'nullable|boolean',
             'workstation_routing_enabled' => 'nullable|boolean',
-            'backflush_on_pallet_creation' => 'nullable|boolean',
+            // Retired switch (RQ-PA-265). Declared so an attempt to switch it
+            // on is rejected out loud instead of being silently ignored; the
+            // setting no longer has any effect.
+            'backflush_on_pallet_creation' => [
+                'nullable',
+                'boolean',
+                function (string $attribute, mixed $value, \Closure $fail): void {
+                    if (filter_var($value, FILTER_VALIDATE_BOOLEAN)) {
+                        $fail(__('Automatic material booking from pallets is disabled; set this to false. Raw material is settled once by the operation that consumes it.'));
+                    }
+                },
+            ],
             'hold_on_material_shortage' => 'nullable|boolean',
             'pallet_stock_documents' => ['nullable', Rule::in(\App\Services\Warehouse\PalletStockDocumentService::MODES)],
             'lot_tracking_enabled' => 'nullable|boolean',

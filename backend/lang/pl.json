@@ -7498,5 +7498,9 @@
     "I record this as a quality decision — missing quantity: :qty pcs": "Zapisuję decyzję jakościową — brakująca ilość: :qty szt.",
     "Closing…": "Zamykanie…",
     "Work order closed short.": "Zlecenie zamknięte krótko.",
-    "Short close failed": "Zamknięcie krótkie nie powiodło się"
+    "Short close failed": "Zamknięcie krótkie nie powiodło się",
+    "Automatic material booking from pallets is disabled; set this to false. Raw material is settled once by the operation that consumes it.": "Automatyczne rozliczanie materiałów z palety jest wyłączone; ustaw tę wartość na false. Surowiec rozlicza raz operacja, która go zużywa.",
+    "Material booking from pallets is disabled; packing works normally. Raw material is settled once by the operation that consumes it.": "Rozliczanie materiałów z palety jest wyłączone; pakowanie działa normalnie. Surowiec rozlicza raz operacja, która go zużywa.",
+    "The stored value \"true\" is not effective: this policy is enforced in code.": "Zapisana wartość \"true\" nie działa: tę politykę wymusza kod.",
+    "Material booking from pallets is disabled; packing works normally. You do not have to do anything.": "Rozliczanie materiałów z palety jest wyłączone; pakowanie działa normalnie. Nie musisz nic robić."
 }

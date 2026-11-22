@@ -4,6 +4,7 @@ import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 import { Button, Checkbox, Dropdown, InlineAlert, Switch, Tabs } from '@openmes/ui';
 import AppLayout from '../../layouts/AppLayout';
 import useConfirm from '../../components/useConfirm';
+import PalletBackflushSetting from './PalletBackflushSetting';
 import { useToast } from '@openmes/ui';
 import { __, formatNumber } from '../../lib/i18n';
 import { Hook } from '../../lib/hooks';
@@ -314,7 +315,6 @@ export default function System() {
         telemetry_enabled: settings.telemetry_enabled ?? true,
         force_sequential_steps: settings.force_sequential_steps ?? true,
         workstation_routing_enabled: settings.workstation_routing_enabled ?? false,
-        backflush_on_pallet_creation: settings.backflush_on_pallet_creation ?? false,
         pallet_stock_documents: settings.pallet_stock_documents ?? 'off',
         hold_on_material_shortage: settings.hold_on_material_shortage ?? false,
         lot_tracking_enabled: settings.lot_tracking_enabled ?? false,
@@ -768,16 +768,8 @@ export default function System() {
                                         </div>
                                     </div>
 
-                                    <div className="flex items-start gap-3">
-                                        <Switch
-                                            checked={data.backflush_on_pallet_creation}
-                                            onChange={(v) => setData('backflush_on_pallet_creation', v)}
-                                        />
-                                        <div>
-                                            <p className="text-[13px] font-medium text-om-ink">{__('Backflush on pallet creation')}</p>
-                                            <p className={HELP_CLASS}>{__('When enabled, creating a pallet declares the BOM consumption for the produced quantity and deducts it from stock at that milestone, instead of continuously.')}</p>
-                                        </div>
-                                    </div>
+                                    {/* Withdrawn policy: shown, explained, never editable. */}
+                                    <PalletBackflushSetting stored={settings.backflush_on_pallet_creation_stored} />
                                 </div>
 
                                 <div>

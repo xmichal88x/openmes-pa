@@ -3,6 +3,7 @@
 namespace Tests\Feature\Web;
 
 use App\Models\Batch;
+use App\Models\BomItem;
 use App\Models\Line;
 use App\Models\LotSequence;
 use App\Models\Material;
@@ -13,6 +14,7 @@ use App\Models\ProcessTemplate;
 use App\Models\ProductType;
 use App\Models\ScrapReason;
 use App\Models\SerialUnit;
+use App\Models\StockMovement;
 use App\Models\TemplateStep;
 use App\Models\UnitCarton;
 use App\Models\User;
@@ -34,6 +36,9 @@ use Tests\TestCase;
 class ProductionScenarioImportTest extends TestCase
 {
     use RefreshDatabase;
+
+    /** The switch is retired: a file that tries to turn it on is refused whole. */
+    private const BACKFLUSH = 'backflush_on_pallet_creation';
 
     private User $admin;
 
@@ -76,6 +81,14 @@ class ProductionScenarioImportTest extends TestCase
         return $this->actingAs($this->admin)->post(route('settings.import'), [
             'settings_file' => UploadedFile::fake()->createWithContent('scenario.json', json_encode($data)),
         ]);
+    }
+
+    /** The same file posted by a client that asks for JSON rather than the admin form. */
+    private function importJson(array $data)
+    {
+        return $this->actingAs($this->admin)->post(route('settings.import'), [
+            'settings_file' => UploadedFile::fake()->createWithContent('scenario.json', json_encode($data)),
+        ], ['Accept' => 'application/json']);
     }
 
     private function order(): array
@@ -247,6 +260,126 @@ class ProductionScenarioImportTest extends TestCase
         $this->assertDatabaseMissing('work_orders', ['order_no' => 'WO-SC-1']);
         $this->assertDatabaseMissing('lines', ['code' => 'SC-NEW']);
         $this->assertSame(0, SerialUnit::count());
+    }
+
+    public function test_an_import_that_switches_on_pallet_backflush_is_refused_and_saves_nothing(): void
+    {
+        $language = DB::table('system_settings')->where('key', 'language')->value('value');
+
+        $this->import([
+            // The other setting comes first in the file: it is written before the
+            // offending key is reached, so only the rollback keeps it out.
+            'settings' => ['language' => 'pl', self::BACKFLUSH => true],
+            'scenario' => ['requires' => ['production_flow_mode' => 'transfer'], 'events' => $this->order()],
+        ])->assertSessionHas('error', fn ($m) => str_contains($m, self::BACKFLUSH) && str_contains($m, 'false'));
+
+        $this->assertSame(0, WorkOrder::count());
+        $this->assertSame(0, Batch::count());
+        // The file's "pl" is written before the refusal is reached: only the
+        // rollback keeps it out.
+        $this->assertSame($language, DB::table('system_settings')->where('key', 'language')->value('value'));
+        $this->assertNotSame('pl', DB::table('system_settings')->where('key', 'language')->value('value'));
+        $this->assertSame('transfer', json_decode(DB::table('system_settings')->where('key', 'production_flow_mode')->value('value'), true));
+        $this->assertSame(0, StockMovement::where('source_type', StockMovement::SOURCE_PALLET)->count());
+    }
+
+    public function test_the_refusal_is_a_json_422_for_a_client_that_expects_json(): void
+    {
+        $language = DB::table('system_settings')->where('key', 'language')->value('value');
+
+        $this->importJson([
+            'settings' => [self::BACKFLUSH => true, 'language' => 'pl'],
+            'scenario' => ['events' => $this->order()],
+        ])->assertStatus(422)
+            ->assertJsonPath('errors.settings_file.0', fn ($m) => str_contains($m, self::BACKFLUSH));
+
+        $this->assertSame(0, WorkOrder::count());
+        $this->assertSame($language, DB::table('system_settings')->where('key', 'language')->value('value'));
+        $this->assertNotSame('pl', DB::table('system_settings')->where('key', 'language')->value('value'));
+        $this->assertDatabaseMissing('system_settings', ['key' => self::BACKFLUSH]);
+    }
+
+    public function test_a_numeric_one_is_refused_as_well(): void
+    {
+        // `1` is what a hand-written file often carries; it must be read as "on".
+        $this->import([
+            'settings' => [self::BACKFLUSH => 1],
+            'scenario' => ['events' => $this->order()],
+        ])->assertSessionHas('error', fn ($m) => str_contains($m, self::BACKFLUSH));
+
+        $this->assertSame(0, WorkOrder::count());
+        $this->assertDatabaseMissing('system_settings', ['key' => self::BACKFLUSH]);
+    }
+
+    public function test_a_file_with_the_switch_false_imports_normally(): void
+    {
+        $this->import([
+            'settings' => [self::BACKFLUSH => false],
+            'scenario' => ['requires' => ['production_flow_mode' => 'transfer'], 'events' => $this->order()],
+        ])->assertSessionHas('success');
+
+        $this->assertDatabaseHas('work_orders', ['order_no' => 'WO-SC-1']);
+        $this->assertSame(1, Batch::count());
+        $this->assertSame(0, StockMovement::where('source_type', StockMovement::SOURCE_PALLET)->count());
+    }
+
+    public function test_a_file_without_the_key_leaves_a_stored_true_alone(): void
+    {
+        // A plant upgraded with the switch on keeps the row as history: the
+        // import never touches a key the file does not carry.
+        DB::table('system_settings')->updateOrInsert(
+            ['key' => self::BACKFLUSH],
+            ['value' => json_encode(true), 'updated_at' => now()],
+        );
+
+        $this->import([
+            'settings' => ['language' => 'pl'],
+            'scenario' => ['requires' => ['production_flow_mode' => 'transfer'], 'events' => $this->order()],
+        ])->assertSessionHas('success');
+
+        $this->assertDatabaseHas('work_orders', ['order_no' => 'WO-SC-1']);
+        $this->assertSame('pl', json_decode(DB::table('system_settings')->where('key', 'language')->value('value'), true));
+        $this->assertSame(true, json_decode(DB::table('system_settings')->where('key', self::BACKFLUSH)->value('value'), true));
+        $this->assertSame(0, StockMovement::where('source_type', StockMovement::SOURCE_PALLET)->count());
+    }
+
+    public function test_the_movements_are_the_same_with_the_switch_false_and_without_the_key(): void
+    {
+        // A BOM line makes the replay allocate material, so the comparison has
+        // something in it. Those allocation rows are the baseline: legal, and
+        // expected to repeat. What may never appear is a pallet row.
+        BomItem::factory()->create([
+            'process_template_id' => ProcessTemplate::where('product_type_id', ProductType::where('code', 'SC-PT')->value('id'))->value('id'),
+            'material_id' => Material::where('code', 'SC-M')->value('id'),
+            'quantity_per_unit' => 1,
+        ]);
+
+        $scenario = fn (string $orderNo) => [
+            'requires' => ['production_flow_mode' => 'transfer'],
+            'users' => [['username' => 'op-a', 'name' => 'Assembler', 'role' => 'Operator', 'lines' => ['SC-L'], 'password' => 'op-a-pass']],
+            'events' => [
+                ['at' => '-1d 07:00', 'do' => 'work_order', 'order_no' => $orderNo, 'product' => 'SC-PT', 'line' => 'SC-L', 'quantity' => 2, 'due' => '+2d'],
+                ['at' => '+1m', 'do' => 'batch', 'order' => $orderNo, 'quantity' => 2],
+                ['do' => 'step_start', 'order' => $orderNo, 'step' => 1, 'by' => 'op-a'],
+            ],
+        ];
+        // Only the rows of one run: the second import must not be compared with
+        // the first one's ledger.
+        $byType = fn (int $after) => StockMovement::query()->where('id', '>', $after)->get()
+            ->groupBy(fn (StockMovement $m) => $m->movement_type.'|'.$m->source_type)
+            ->map->count()->sortKeys()->all();
+
+        $after = (int) StockMovement::max('id');
+        $this->import(['settings' => [self::BACKFLUSH => false], 'scenario' => $scenario('WO-SC-1')])->assertSessionHas('success');
+        $withFalse = $byType($after);
+
+        $after = (int) StockMovement::max('id');
+        $this->import(['scenario' => $scenario('WO-SC-2')])->assertSessionHas('success');
+        $withoutKey = $byType($after);
+
+        $this->assertNotEmpty($withFalse, 'The replayed step allocated nothing - the comparison would prove nothing.');
+        $this->assertSame($withFalse, $withoutKey);
+        $this->assertSame(0, StockMovement::where('source_type', StockMovement::SOURCE_PALLET)->count());
     }
 
     public function test_the_required_flow_mode_and_past_times_are_enforced(): void

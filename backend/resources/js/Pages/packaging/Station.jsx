@@ -801,6 +801,12 @@ export default function Station() {
                             </div>
                         )}
 
+                        {/* Material booking policy: one calm line, whether or not a pallet is active.
+                            Nothing in the station reacts to it - the operator packs on. */}
+                        <p className="border-t border-om-line2 px-[22px] py-3 text-[12px] text-om-faint" data-testid="material-backflush-policy">
+                            {__('Material booking from pallets is disabled; packing works normally. You do not have to do anything.')}
+                        </p>
+
                         {/* Open pallets, grouped by line: resume one instead of starting another. */}
                         <div className="border-t border-om-line2">
                             {openPallets.length === 0 ? (

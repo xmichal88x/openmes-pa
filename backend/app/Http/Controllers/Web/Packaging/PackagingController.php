@@ -551,6 +551,7 @@ class PackagingController extends Controller
 
         return response()->json([
             'pallet' => $this->palletPayload($pallet->fresh(['workOrder.line', 'batch', 'activeBy', 'activeWorkstation'])),
+            'material_backflush' => $this->materialBackflushNotice(),
             'message' => __('Pallet :no created', ['no' => $pallet->pallet_no]),
         ], 201);
     }
@@ -576,6 +577,7 @@ class PackagingController extends Controller
 
             return response()->json([
                 'pallet' => $this->palletPayload($pallet->fresh(['workOrder.line', 'batch'])),
+                'material_backflush' => $this->materialBackflushNotice(),
                 'message' => __('Pallet :no closed', ['no' => $pallet->pallet_no]),
             ]);
         });
@@ -675,6 +677,23 @@ class PackagingController extends Controller
             'updated_at' => $pallet->updated_at?->toIso8601String(),
             // The packing step may name the pallet label to print; the station's print button prefers it.
             'label_template_id' => $this->packing()->labelTemplateIdFor($pallet->work_order_id, 'pallet'),
+        ];
+    }
+
+    /**
+     * The material booking policy as the station should read it: raw material is
+     * settled once by the operation that consumes it, so booking from a pallet is
+     * disabled. This is policy information about a successful operation, not an
+     * error - the operator packs on and does nothing.
+     *
+     * @return array{status: string, code: string, reason: string}
+     */
+    private function materialBackflushNotice(): array
+    {
+        return [
+            'status' => 'disabled',
+            'code' => \App\Exceptions\PalletBackflushDisabledException::CODE,
+            'reason' => 'raw_material_settled_by_operation',
         ];
     }
 
