@@ -534,7 +534,9 @@ export default function Station() {
                     setTimeout(() => closeCarton(full), 400);
                 }
             } else {
-                setPsnResult({ success: false, error: data.message, scanned_at: formatTime(new Date()) });
+                // A packed label is refused with where it already is: the bench shows
+                // that as information, not as an anonymous failure (P2.13).
+                setPsnResult({ success: false, alreadyPacked: data.already_packed === true, error: data.message, scanned_at: formatTime(new Date()) });
                 setFlash('error');
             }
         } catch {
@@ -1021,21 +1023,18 @@ export default function Station() {
 
                     {psnResult && (
                         <InlineAlert
-                            // A rescan of a unit already in its box: nothing moved, so it
-                            // reads as information, with when it was packed.
-                            severity={!psnResult.success ? 'error' : psnResult.alreadyPacked ? 'info' : 'success'}
-                            title={!psnResult.success ? psnResult.error : psnResult.alreadyPacked
-                                ? __(':sn is already packed - nothing changed', { sn: psnResult.unit.serial_no })
-                                : psnResult.unit.serial_no}
+                            // A rescan of a packed label: nothing moved, so it reads as
+                            // information (the server message names the carton/pallet and
+                            // when it was packed), never as an anonymous error.
+                            severity={psnResult.alreadyPacked ? 'info' : !psnResult.success ? 'error' : 'success'}
+                            title={psnResult.alreadyPacked ? psnResult.error : !psnResult.success ? psnResult.error : psnResult.unit.serial_no}
                             className="mt-3"
                         >
                             {psnResult.success && [
                                 psnResult.unit.work_order?.order_no,
                                 psnResult.unit.carton && `${psnResult.unit.carton.carton_no} (${psnResult.unit.carton.qty})`,
                                 psnResult.unit.pallet_no,
-                                psnResult.alreadyPacked && psnResult.unit.packed_at
-                                    ? __('packed at :time', { time: psnResult.unit.packed_at })
-                                    : psnResult.scanned_at,
+                                psnResult.scanned_at,
                             ].filter(Boolean).join(' · ')}
                         </InlineAlert>
                     )}

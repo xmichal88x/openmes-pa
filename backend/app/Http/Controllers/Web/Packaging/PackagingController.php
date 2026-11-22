@@ -20,11 +20,13 @@ use App\Models\WorkOrder;
 use App\Models\WorkOrderEan;
 use App\Services\Material\MaterialAllocationService;
 use App\Services\Packaging\PackagingScanService;
+use App\Services\Packaging\UnitAlreadyPackedException;
 use App\Services\Packaging\UnitPackingService;
 use App\Services\Production\OperatorWorkstationSelection;
 use App\Services\Production\PalletBackflushService;
 use App\Services\Quality\QualityGateService;
 use App\Services\Traceability\BindingException;
+use App\Services\Traceability\UnitForeignBatchException;
 use App\Support\ShiftWindow;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -372,9 +374,9 @@ class PackagingController extends Controller
         if ($auto && $otherOrder($pallet)) {
             $pallet = null;
         }
-        // On "auto" a unit that is already packed stays where it is: the bench's
-        // box is only a guess, and aiming the rescan at it would refuse the unit
-        // (or open an empty carton) instead of saying it is already packed.
+        // On "auto" the bench's box is only a guess: it is not aimed at a rescan,
+        // so the refusal below names the unit's own carton instead of this box
+        // and no empty carton is opened for a label that is already packed.
         if ($auto && $alreadyPlaced) {
             $carton = $pallet = null;
         }
@@ -385,10 +387,9 @@ class PackagingController extends Controller
         $labelNeeded = ($config['unit_label'] ?? true) !== false;
 
         // The service refuses a unit the line has taken off (scrapped, blocked
-        // after tests, already shipped) - that is how a bad unit leaves.
-        // A second read of a packed unit changes nothing; the bench says so rather
-        // than confirm it as if the unit had just gone in.
-        $placedBefore = $unit->packed_at !== null ? [$unit->carton_id, $unit->pallet_id] : null;
+        // after tests, already shipped) - that is how a bad unit leaves. A label
+        // read a second time is refused too (P2.13): the bench is told where the
+        // label already is, instead of the scan quietly changing nothing.
         // The box opened for this scan and the packing stand or fall together: a
         // refused unit leaves no empty carton behind on the bench.
         try {
@@ -420,6 +421,26 @@ class PackagingController extends Controller
 
                 return [$packing->packUnit($unit, $request->user(), $carton, $pallet, self::benchId($request), $measured), $carton];
             });
+        } catch (UnitAlreadyPackedException $e) {
+            // The label is already in a box or on a pallet: the station shows
+            // where and when as information, not as an anonymous error.
+            return response()->json([
+                'message' => $e->getMessage(),
+                'already_packed' => true,
+                'carton' => $e->cartonNo,
+                'pallet' => $e->palletNo,
+                'packed_at' => $e->packedAtLabel,
+            ], 422);
+        } catch (UnitForeignBatchException $e) {
+            // The unit's batch belongs to another order: packing it here would
+            // book the piece on the wrong order's batch (P2.13).
+            return response()->json([
+                'message' => $e->getMessage(),
+                'unit_foreign_batch' => true,
+                'batch' => $e->batchNo,
+                'batch_work_order' => $e->batchOrderNo,
+                'unit_work_order' => $e->unitOrderNo,
+            ], 422);
         } catch (BindingException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
@@ -428,7 +449,6 @@ class PackagingController extends Controller
         $wo = $unit->workOrder;
         $palletClosed = $packing->closePalletIfFull($unit->pallet) ? $unit->pallet->fresh() : null;
         $template = $packing->labelTemplateIdFor($unit->work_order_id, 'unit');
-        $alreadyPacked = $placedBefore === [$unit->carton_id, $unit->pallet_id];
 
         return response()->json([
             'unit' => [
@@ -445,7 +465,8 @@ class PackagingController extends Controller
                 'pallet_no' => $unit->pallet?->pallet_no,
                 'packed_at' => $unit->packed_at?->format('H:i'),
             ],
-            'already_packed' => $alreadyPacked,
+            // A rescan never reaches this success body: it is a 422 refusal.
+            'already_packed' => false,
             // The box reached the packing step's size: the station closes it and prints its list.
             'carton_full' => (bool) ($capacity && $unit->carton?->isOpen() && $unit->carton->qty >= $capacity),
             'label_pdf' => route('packaging.labels.serial-unit.pdf', array_filter(['serialUnit' => $unit, 'template' => $template])),
@@ -453,9 +474,7 @@ class PackagingController extends Controller
             'label_needed' => $labelNeeded,
             'carton_opened' => $carton && $carton->wasRecentlyCreated ? $carton->carton_no : null,
             'pallet_closed' => $palletClosed ? $this->closedPalletPayload($palletClosed, $packing) : null,
-            'message' => $alreadyPacked
-                ? __('Unit :sn is already packed - nothing changed.', ['sn' => $unit->display_id])
-                : __('Unit :sn found - print the carton label.', ['sn' => $unit->display_id]),
+            'message' => __('Unit :sn found - print the carton label.', ['sn' => $unit->display_id]),
         ]);
     }
 

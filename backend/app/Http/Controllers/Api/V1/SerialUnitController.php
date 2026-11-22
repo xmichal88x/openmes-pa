@@ -15,6 +15,7 @@ use App\Models\ScrapReason;
 use App\Models\SerialUnit;
 use App\Services\Traceability\BindingException;
 use App\Services\Traceability\SerialTraceService;
+use App\Services\Traceability\UnitForeignBatchException;
 use App\Support\UnitSerialisation;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -118,7 +119,16 @@ class SerialUnitController extends Controller
             return response()->json(['data' => $unit], 201);
         }
 
-        $unit = $this->serials->registerUnit($data['serial_no'], $data);
+        try {
+            $unit = $this->serials->registerUnit($data['serial_no'], $data);
+        } catch (BindingException $e) {
+            // A batch of another order is refused by name (P2.13) - the request
+            // is invalid, not the server.
+            return response()->json([
+                'message' => $e->getMessage(),
+                ...$e instanceof UnitForeignBatchException ? ['unit_foreign_batch' => true] : [],
+            ], 422);
+        }
 
         return response()->json(['data' => $unit], 201);
     }

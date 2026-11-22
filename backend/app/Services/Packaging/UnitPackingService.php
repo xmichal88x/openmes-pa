@@ -17,6 +17,7 @@ use App\Services\Material\LotPickingService;
 use App\Services\Material\MaterialAllocationService;
 use App\Services\Traceability\BindingException;
 use App\Services\Traceability\SerialTraceService;
+use App\Services\Traceability\UnitForeignBatchException;
 use App\Services\WorkOrder\BatchService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -317,6 +318,18 @@ class UnitPackingService
             $pallet = $pallet ? Pallet::whereKey($pallet->id)->lockForUpdate()->firstOrFail() : null;
 
             $this->assertPackable($unit);
+            // Defense in depth (P2.13): a unit is made on a batch of its own
+            // order. Registration refuses such a pair; a unit written before
+            // that guard still must not be packed onto another order's batch.
+            $batch = $unit->batch;
+            if ($batch && $unit->work_order_id && (int) $batch->work_order_id !== (int) $unit->work_order_id) {
+                throw new UnitForeignBatchException(
+                    batchNo: $batch->batch_number,
+                    batchOrderNo: $batch->workOrder?->order_no,
+                    unitOrderNo: $unit->workOrder?->order_no ?? __('unknown'),
+                    sn: $unit->display_id,
+                );
+            }
             if ($carton && ! $carton->isOpen()) {
                 throw new BindingException(__('Carton :no is closed.', ['no' => $carton->carton_no]));
             }
@@ -358,10 +371,13 @@ class UnitPackingService
             $alreadyInCarton = $carton && $unit->carton_id === $carton->id;
             $newOnPallet = $pallet && $unit->pallet_id !== $pallet->id;
             $firstPacking = $unit->packed_at === null;
-            // The same label read twice (a wedge scanner, a nervous hand) changes
-            // nothing and writes nothing: the history keeps one "packed" per move.
+            // The same label read twice (a wedge scanner, a nervous hand) is
+            // refused, not silently ignored (P2.13): the label is already in a
+            // carton or on a pallet, and the bench has to hear where and when.
+            // Moving a packed unit from its carton onto a pallet is not a rescan
+            // and still passes - only the same move twice is refused.
             if (! $firstPacking && ($alreadyInCarton || (! $carton && ! $newOnPallet))) {
-                return [$unit, false];
+                throw UnitAlreadyPackedException::for($unit);
             }
 
             $unit->fill([

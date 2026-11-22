@@ -53,8 +53,9 @@ class UnitCartonTest extends TestCase
         $this->hit('packaging.scan-unit', [], ['psn' => 'P-1', 'carton_id' => $carton['id']])
             ->assertOk()->assertJsonPath('unit.carton.carton_no', 'CTN-000001')->assertJsonPath('unit.status', 'completed');
         $this->hit('packaging.scan-unit', [], ['psn' => 'P-2', 'carton_id' => $carton['id']])->assertOk();
-        // Scanning the same unit twice does not count it twice.
-        $this->hit('packaging.scan-unit', [], ['psn' => 'P-2', 'carton_id' => $carton['id']])->assertOk();
+        // Scanning the same unit twice is refused (P2.13) and does not count it twice.
+        $this->hit('packaging.scan-unit', [], ['psn' => 'P-2', 'carton_id' => $carton['id']])
+            ->assertStatus(422)->assertJsonPath('already_packed', true);
 
         $this->actingAs($this->operator)->getJson(route('packaging.cartons.show', ['carton' => $carton['id']]))
             ->assertOk()->assertJsonPath('carton.qty', 2)->assertJsonCount(2, 'units');

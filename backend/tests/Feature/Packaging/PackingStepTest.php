@@ -157,17 +157,17 @@ class PackingStepTest extends TestCase
             ->assertOk()->json('unit.carton.id');
 
         // Another packer's bench has no box of its own: the rescan neither opens an
-        // empty carton nor refuses the unit - it says where the unit already is.
+        // empty carton nor packs the unit again - it is refused with the unit's own
+        // box (P2.13), so the label never moves to a second station.
         $other = User::factory()->create();
         $other->assignRole('Operator');
         $cartons = \App\Models\UnitCarton::count();
         $this->actingAs($other)->postJson(route('packaging.scan-unit'), ['psn' => "P-{$wo->id}-1", 'auto_carton' => true])
-            ->assertOk()
+            ->assertStatus(422)
             ->assertJsonPath('already_packed', true)
-            ->assertJsonPath('unit.carton.id', $box)
-            ->assertJsonPath('unit.carton.qty', 1)
-            ->assertJsonPath('carton_opened', null);
+            ->assertJsonPath('carton', \App\Models\UnitCarton::find($box)->carton_no);
         $this->assertSame($cartons, \App\Models\UnitCarton::count());
+        $this->assertSame($box, SerialUnit::where('psn', "P-{$wo->id}-1")->value('carton_id'));
     }
 
     public function test_a_carton_holds_the_packing_steps_size_and_the_server_enforces_it(): void
@@ -406,11 +406,15 @@ class PackingStepTest extends TestCase
 
         $this->actingAs($this->operator)->postJson(route('packaging.scan-unit'), ['psn' => "P-{$wo->id}-1", 'pallet_id' => $first->id])
             ->assertOk()->assertJsonPath('already_packed', false);
-        // The wedge scanner fired twice: still one unit on the step, one on the pallet,
-        // and the bench is told the unit was already packed rather than packed again.
-        $this->actingAs($this->operator)->postJson(route('packaging.scan-unit'), ['psn' => "P-{$wo->id}-1", 'pallet_id' => $first->id])
-            ->assertOk()->assertJsonPath('already_packed', true)
-            ->assertJsonPath('message', "Unit SN-{$wo->id}-1 is already packed - nothing changed.");
+        // The wedge scanner fired twice: the second read is refused with where the
+        // label already is (P2.13), and still one unit on the step, one on the pallet.
+        $refused = $this->actingAs($this->operator)->postJson(route('packaging.scan-unit'), ['psn' => "P-{$wo->id}-1", 'pallet_id' => $first->id])
+            ->assertStatus(422)
+            ->assertJsonPath('already_packed', true)
+            ->assertJsonPath('carton', null)
+            ->assertJsonPath('pallet', $first->pallet_no)
+            ->json();
+        $this->assertStringContainsString('rescan refused', $refused['message']);
         $this->assertSame(1.0, (float) $pack->fresh()->passed_qty);
         $this->assertSame(1, $first->fresh()->qty);
         $this->assertSame(1, SerialUnit::where('psn', "P-{$wo->id}-1")->first()->history()->where('parameters->event', 'packed')->count(), 'a rescan writes no second packed event');

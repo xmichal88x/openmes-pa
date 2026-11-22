@@ -24,6 +24,19 @@ class StoreSerialUnitRequest extends FormRequest
             'serial_no' => $settings->normalize($this->input('serial_no')),
             'psn' => $settings->normalize($this->input('psn')),
         ]);
+
+        // A batch belongs to exactly one work order, so naming the batch alone
+        // says which order the unit is made on - the batch determines the order,
+        // nothing is guessed. Merged before validation so both the rules and the
+        // insert see it; a batch named next to a foreign order is a conflict and
+        // is refused in after() instead (P2.13).
+        $batchId = $this->input('batch_id');
+        if (is_numeric($batchId) && $this->input('work_order_id') === null) {
+            $workOrderId = Batch::query()->whereKey((int) $batchId)->value('work_order_id');
+            if ($workOrderId !== null) {
+                $this->merge(['work_order_id' => $workOrderId]);
+            }
+        }
     }
 
     public function rules(): array
@@ -50,6 +63,9 @@ class StoreSerialUnitRequest extends FormRequest
     {
         return [
             function (Validator $validator) {
+                // A batch named alone has already fixed the order above; naming
+                // both is accepted only when they agree - a unit never changes
+                // order through its batch (P2.13).
                 $batchId = $this->input('batch_id');
                 $workOrderId = $this->input('work_order_id');
 

@@ -232,9 +232,12 @@ class QaGateTest extends TestCase
         $wo = $this->packableOrder();
 
         $this->scan($wo, ['qa' => ['items' => [['id' => 'dim', 'value' => true]]]])->assertOk();
+        // A rescan is refused (P2.13) but never asks for QA again: the unit is not
+        // going in a second time, so the gate has nothing to decide.
         $this->scan($wo)
-            ->assertOk()
-            ->assertJsonPath('already_packed', true);
+            ->assertStatus(422)
+            ->assertJsonPath('already_packed', true)
+            ->assertJsonMissingPath('needs_qa');
 
         $this->assertNotNull($this->unit($wo)->packed_at);
     }

@@ -23,6 +23,7 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -169,6 +170,39 @@ class ProductionScenarioImportTest extends TestCase
         $this->assertFalse($this->admin->fresh()->hasRole('Operator'));
         // The clock is back where it was.
         $this->assertSame('2026-09-20 12:00:00', now()->format('Y-m-d H:i:s'));
+    }
+
+    public function test_a_replayed_pack_of_the_same_label_is_skipped_and_the_import_goes_on(): void
+    {
+        Log::spy();
+
+        $events = [
+            ...$this->order(),
+            ['at' => '+1m', 'do' => 'unit_start', 'order' => 'WO-SC-1', 'ref' => 'u1', 'workstation' => 'SC-A', 'by' => 'op-a'],
+            ['at' => '+1m', 'do' => 'pack', 'unit' => 'u1', 'workstation' => 'SC-P', 'by' => 'op-a'],
+            // The same label replayed: at the bench that scan is refused (P2.13);
+            // the import records the skip and replays the rest of the file.
+            ['at' => '+1m', 'do' => 'pack', 'unit' => 'u1', 'workstation' => 'SC-P', 'by' => 'op-a'],
+        ];
+
+        $this->import([
+            'scenario' => [
+                'requires' => ['production_flow_mode' => 'transfer'],
+                'users' => [['username' => 'op-a', 'name' => 'Assembler', 'role' => 'Operator', 'lines' => ['SC-L'], 'password' => 'op-a-pass']],
+                'events' => $events,
+            ],
+        ])->assertSessionHas('success');
+
+        $order = WorkOrder::where('order_no', 'WO-SC-1')->firstOrFail();
+        $unit = SerialUnit::where('work_order_id', $order->id)->firstOrFail();
+        $carton = UnitCarton::where('work_order_id', $order->id)->firstOrFail();
+        $this->assertSame(1, (int) $carton->qty);
+        $this->assertSame(1, $unit->history()->where('parameters->event', 'packed')->count());
+        Log::shouldHaveReceived('info')->withArgs(
+            fn (string $message, array $context = []) => $message === 'Scenario pack skipped: label already packed'
+                && ($context['carton_no'] ?? null) === $carton->carton_no
+                && ($context['serial_no'] ?? null) === $unit->serial_no
+        );
     }
 
     public function test_the_import_sends_no_live_deltas(): void

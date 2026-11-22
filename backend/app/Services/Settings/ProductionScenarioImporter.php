@@ -17,6 +17,7 @@ use App\Models\User;
 use App\Models\WorkOrder;
 use App\Models\Workstation;
 use App\Services\Lot\LotService;
+use App\Services\Packaging\UnitAlreadyPackedException;
 use App\Services\Packaging\UnitPackingService;
 use App\Services\Production\PalletBackflushService;
 use App\Services\Schedule\SchedulePlannerService;
@@ -30,6 +31,7 @@ use Carbon\Carbon;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Spatie\Permission\Models\Role;
 
@@ -552,7 +554,23 @@ class ProductionScenarioImporter
                 ?? $this->packing->openCarton($user, $unit->workOrder, $pallet, $workstation?->id);
         }
 
-        $unit = $this->packing->packUnit($unit, $user, $carton, $carton ? null : $pallet, $workstation?->id, $measured);
+        try {
+            $unit = $this->packing->packUnit($unit, $user, $carton, $carton ? null : $pallet, $workstation?->id, $measured);
+        } catch (UnitAlreadyPackedException $e) {
+            // A scenario may replay the same label twice; at the bench that scan
+            // is refused (P2.13), so the import records the skip - with where the
+            // label already is - instead of failing the whole file on it.
+            Log::info('Scenario pack skipped: label already packed', [
+                'work_order_no' => $unit->workOrder?->order_no,
+                'serial_no' => $unit->serial_no,
+                'psn' => $unit->psn,
+                'carton_no' => $e->cartonNo,
+                'pallet_no' => $e->palletNo,
+                'packed_at' => $e->packedAtLabel,
+            ]);
+
+            return;
+        }
         $this->packing->closePalletIfFull($unit->pallet);
     }
 

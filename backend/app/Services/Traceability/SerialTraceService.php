@@ -2,6 +2,7 @@
 
 namespace App\Services\Traceability;
 
+use App\Models\Batch;
 use App\Models\BatchStep;
 use App\Models\Material;
 use App\Models\MaterialLot;
@@ -34,9 +35,21 @@ class SerialTraceService
 
     /**
      * Register a new serialised unit (or return the existing one for the serial).
+     *
+     * @throws UnitForeignBatchException when the named batch belongs to another work order
+     * @throws BindingException when the named batch does not exist
      */
     public function registerUnit(string $serialNo, array $attributes = []): SerialUnit
     {
+        // A batch belongs to exactly one order: naming the batch alone is enough
+        // (the order is read from it, never guessed), and a different order named
+        // next to the batch is refused (P2.13).
+        $attributes['work_order_id'] = $this->workOrderForBatch(
+            isset($attributes['batch_id']) ? (int) $attributes['batch_id'] : null,
+            isset($attributes['work_order_id']) ? (int) $attributes['work_order_id'] : null,
+            $serialNo,
+        );
+
         // Tenant comes from the global scope on the lookup and from HasTenant on
         // the insert - naming it here would search "tenant X AND tenant NULL".
         return SerialUnit::firstOrCreate(
@@ -51,6 +64,39 @@ class SerialTraceService
                 'extra_data' => $attributes['extra_data'] ?? null,
             ]
         );
+    }
+
+    /**
+     * The work order a unit on this batch belongs to. A batch has exactly one,
+     * so the batch determines the order; an order named next to a batch of
+     * another order is refused rather than silently overridden (P2.13).
+     *
+     * @throws UnitForeignBatchException when the batch belongs to another order
+     * @throws BindingException when the batch does not exist
+     */
+    public function workOrderForBatch(?int $batchId, ?int $workOrderId, string $sn): ?int
+    {
+        if ($batchId === null) {
+            return $workOrderId;
+        }
+
+        $batch = Batch::query()->with('workOrder:id,order_no')->find($batchId);
+        if (! $batch) {
+            throw new BindingException(__('Batch :id does not exist - unit :sn cannot be registered on it.', ['id' => $batchId, 'sn' => $sn]));
+        }
+        if ($workOrderId === null) {
+            return $batch->work_order_id;
+        }
+        if ((int) $batch->work_order_id !== $workOrderId) {
+            throw new UnitForeignBatchException(
+                batchNo: $batch->batch_number,
+                batchOrderNo: $batch->workOrder?->order_no,
+                unitOrderNo: WorkOrder::find($workOrderId)?->order_no ?? __('unknown'),
+                sn: $sn,
+            );
+        }
+
+        return $workOrderId;
     }
 
     /**
