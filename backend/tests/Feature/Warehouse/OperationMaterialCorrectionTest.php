@@ -16,9 +16,11 @@ use App\Models\WarehouseStock;
 use App\Models\WorkOrder;
 use App\Services\Material\MaterialAllocationService;
 use App\Services\Material\MaterialSettlementPolicy;
+use App\Services\Material\MaterialSettlementScope;
 use App\Services\WorkOrder\BatchService;
 use App\Services\WorkOrder\WorkOrderService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Schema;
 use Inertia\Testing\AssertableInertia;
 use Tests\TestCase;
 
@@ -611,6 +613,107 @@ class OperationMaterialCorrectionTest extends TestCase
 
         $this->withToken($this->token($this->admin))
             ->postJson("/api/v1/material-allocations/{$allocation->id}/correct", $this->payload())
+            ->assertStatus(422)
+            ->assertJson(['code' => 'material_correction_not_applicable']);
+
+        $this->assertSame($movementsBefore, $this->movementIds());
+        $this->assertNull($allocation->fresh()->correction_recorded_by_id);
+    }
+
+    // ── 14. the settlement terms are frozen on the allocation ─────────────────
+
+    public function test_a_settled_pilot_line_is_still_correctable_after_the_scope_is_switched_off(): void
+    {
+        [$workOrder, , $allocation] = $this->settledBatch('WO-RQ265-CORRECT-OFF');
+
+        $this->assertSame(MaterialSettlementPolicy::MODE_OPERATION, $allocation->settlement_mode);
+        $this->assertStock(90.0);
+
+        // The retrieval is settled, so the pilot may be switched off…
+        app(MaterialSettlementScope::class)->disable($workOrder->fresh(), $this->admin);
+
+        $this->assertSame(
+            MaterialSettlementPolicy::MODE_LEGACY,
+            app(MaterialSettlementPolicy::class)->modeFor($workOrder->fresh(), $this->material->id),
+            'The read-only policy follows the order: the order is back on the legacy scope.',
+        );
+
+        // …and the correction still works, because the line carries the terms it
+        // was settled under — not the terms the order happens to carry today.
+        $this->withToken($this->token($this->supervisor))
+            ->postJson("/api/v1/material-allocations/{$allocation->id}/correct", $this->payload([
+                'consumed_qty' => 8,
+                'scrap_qty' => 0,
+            ]))
+            ->assertOk();
+
+        $this->assertStock(92.0);
+        $this->assertEqualsWithDelta(8.0, (float) $allocation->fresh()->consumed_qty, 0.0001);
+        $this->assertSame($this->supervisor->id, (int) $allocation->fresh()->correction_recorded_by_id);
+    }
+
+    public function test_the_settlement_mode_column_exists_on_allocations(): void
+    {
+        $this->assertTrue(Schema::hasColumn('material_allocations', 'settlement_mode'));
+    }
+
+    public function test_the_pilot_confirmation_freezes_the_operation_mode(): void
+    {
+        [, , $allocation] = $this->startedBatch($this->pilotExtraData(), 'WO-RQ265-CORRECT-FREEZE');
+
+        $fresh = app(MaterialAllocationService::class)
+            ->recordConsumption($allocation, 8.0, 2.0, null, $this->operator);
+
+        $this->assertSame(MaterialSettlementPolicy::MODE_OPERATION, $fresh->settlement_mode);
+        $this->assertSame(MaterialSettlementPolicy::MODE_OPERATION, $allocation->fresh()->settlement_mode);
+    }
+
+    public function test_a_legacy_confirmation_freezes_the_legacy_mode(): void
+    {
+        [, , $allocation] = $this->startedBatch([], 'WO-RQ265-CORRECT-FREEZE-LEGACY');
+
+        // No actor and no pilot: a packaging/legacy call still freezes its terms,
+        // because the mode is a fact about the settlement, not about the caller.
+        $fresh = app(MaterialAllocationService::class)->recordConsumption($allocation, 5.0, 0.0);
+
+        $this->assertSame(MaterialSettlementPolicy::MODE_LEGACY, $fresh->settlement_mode);
+        $this->assertNull($fresh->consumption_recorded_by_id);
+    }
+
+    public function test_a_settled_legacy_confirmation_cannot_be_corrected(): void
+    {
+        [, $batch, $allocation] = $this->startedBatch([], 'WO-RQ265-CORRECT-LEGACY-FROZEN');
+
+        app(MaterialAllocationService::class)->recordConsumption($allocation, 10.0, 0.0, null, $this->operator);
+        app(MaterialAllocationService::class)->consumeForBatch($batch);
+
+        $this->assertSame(MaterialSettlementPolicy::MODE_LEGACY, $allocation->fresh()->settlement_mode);
+
+        $movementsBefore = $this->movementIds();
+
+        $this->withToken($this->token($this->admin))
+            ->postJson("/api/v1/material-allocations/{$allocation->id}/correct", $this->payload())
+            ->assertStatus(422)
+            ->assertJson(['code' => 'material_correction_not_applicable']);
+
+        $this->assertSame($movementsBefore, $this->movementIds());
+        $this->assertNull($allocation->fresh()->correction_recorded_by_id);
+    }
+
+    public function test_an_allocation_without_a_frozen_mode_cannot_be_corrected(): void
+    {
+        [, , $allocation] = $this->settledBatch('WO-RQ265-CORRECT-NO-MODE');
+
+        // A line confirmed before the mode was recorded: nothing is frozen, so
+        // there are no terms to correct against.
+        MaterialAllocation::query()->whereKey($allocation->id)->update(['settlement_mode' => null]);
+
+        $movementsBefore = $this->movementIds();
+
+        $this->withToken($this->token($this->supervisor))
+            ->postJson("/api/v1/material-allocations/{$allocation->id}/correct", $this->payload([
+                'consumed_qty' => 8,
+            ]))
             ->assertStatus(422)
             ->assertJson(['code' => 'material_correction_not_applicable']);
 

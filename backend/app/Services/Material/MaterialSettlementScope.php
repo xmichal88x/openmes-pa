@@ -236,11 +236,16 @@ class MaterialSettlementScope
      * erased — an order that was once in the pilot says so, and says who ended
      * it and when.
      *
-     * Refused while a withdrawal is still outstanding: leaving the pilot would
-     * hand that allocation back to the plan-driven settlement, and the batch
+     * Refused while a pilot withdrawal is still outstanding: leaving the pilot
+     * would hand that allocation back to the plan-driven settlement, and the batch
      * would book a quantity nobody declared — exactly the silent substitution
      * this pilot exists to remove. The retrieval must be declared and settled
      * first (a declared zero counts as a declaration).
+     *
+     * Once the withdrawal is settled the switch is free again: the terms of that
+     * settlement are frozen on the allocation itself (RQ-PA-265 A7), so nothing
+     * is rewritten by ending the pilot — the legacy rows the order still holds
+     * never depended on it.
      *
      * @throws \DomainException with an `ERROR_*` code as the message prefix
      */
@@ -291,7 +296,41 @@ class MaterialSettlementScope
     }
 
     /**
-     * Refuse switching the pilot off while material is still outstanding.
+     * Is a withdrawal still owed to the pilot on this order?
+     *
+     * Narrower than {@see hasOpenAllocation()}: a row whose confirmation froze
+     * the `operation` mode is a pilot row wherever the order stands today, and a
+     * row that is still unconfirmed but belongs to a component in the current
+     * scope is a pilot row as well — its mode is only frozen by the confirmation
+     * that is still missing (RQ-PA-265 A7).
+     *
+     * A settled row (consumed/returned) owes nothing: it carries its own frozen
+     * terms, so switching the scope off no longer rewrites how it is corrected.
+     */
+    public function hasOpenPilotAllocation(WorkOrder $workOrder): bool
+    {
+        $materials = $this->current($workOrder)['materials'];
+
+        return MaterialAllocation::query()
+            ->where('work_order_id', $workOrder->id)
+            ->where('status', MaterialAllocation::STATUS_ALLOCATED)
+            ->where(function ($query) use ($materials) {
+                $query->where('settlement_mode', MaterialSettlementPolicy::MODE_OPERATION);
+
+                if ($materials === []) {
+                    return;
+                }
+
+                $query->orWhere(function ($unconfirmed) use ($materials) {
+                    $unconfirmed->whereNull('settlement_mode')
+                        ->whereIn('material_id', $materials);
+                });
+            })
+            ->exists();
+    }
+
+    /**
+     * Refuse switching the pilot off while a pilot withdrawal is still outstanding.
      *
      * Public so a caller that must not write — a console `--dry-run`, a preview
      * screen — can ask the same question the write path asks, instead of
@@ -301,14 +340,14 @@ class MaterialSettlementScope
      */
     public function guardDisable(WorkOrder $workOrder): void
     {
-        if (! $this->hasOpenAllocation($workOrder)) {
+        if (! $this->hasOpenPilotAllocation($workOrder)) {
             return;
         }
 
         throw new \DomainException(sprintf(
             '%s: %s',
             self::ERROR_WORK_ORDER_IN_FLIGHT,
-            __('Material is still withdrawn for :order_no; declare and settle the retrieval first (a declared zero counts too), then switch the settlement scope off.', [
+            __('A pilot withdrawal is still open for :order_no; declare and settle the retrieval first (a declared zero counts too), then switch the settlement scope off.', [
                 'order_no' => $workOrder->order_no,
             ]),
         ));

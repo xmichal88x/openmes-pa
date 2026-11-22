@@ -39,6 +39,10 @@ class MaterialAllocation extends Model
         'consumption_recorded_at',
         'consumption_source',
         'consumption_key',
+        // The settlement terms this confirmation was signed under, frozen at
+        // declaration time so a later scope change never rewrites them
+        // (RQ-PA-265 A7): `operation` or `legacy`, null when never confirmed.
+        'settlement_mode',
         // Correction evidence, written by the correction path (RQ-PA-265 A5).
         'correction_recorded_by_id',
         'correction_recorded_at',

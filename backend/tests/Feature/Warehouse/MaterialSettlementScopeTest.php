@@ -232,7 +232,7 @@ class MaterialSettlementScopeTest extends TestCase
      *
      * @return array{0: WorkOrder, 1: Material}
      */
-    private function inFlightOrder(array $extraData = []): array
+    private function inFlightOrder(array $extraData = [], bool $pilot = false): array
     {
         $material = $this->bomMaterial('FORMATKA-INFLIGHT', 'szt', 'none');
         $product = ProductType::factory()->create(['code' => 'PROD-RQ265-INFLIGHT', 'unit_of_measure' => 'szt']);
@@ -277,6 +277,18 @@ class MaterialSettlementScopeTest extends TestCase
             'scrap_percentage' => 0,
             'consumed_at' => 'during',
         ]);
+
+        // The scope cannot be switched on once the order is in flight, so a
+        // pilot fixture is written straight onto the order — the same shape
+        // enable() leaves behind.
+        if ($pilot) {
+            $extraData[MaterialSettlementPolicy::EXTRA_DATA_KEY] = [
+                'mode' => MaterialSettlementPolicy::MODE_OPERATION,
+                'materials' => [$material->id],
+                'enabled_by' => $this->admin->id,
+                'enabled_at' => '2026-11-20T10:00:00+00:00',
+            ];
+        }
 
         $workOrder = WorkOrder::factory()->create([
             'order_no' => 'WO-RQ265-INFLIGHT',
@@ -720,15 +732,7 @@ class MaterialSettlementScopeTest extends TestCase
 
     public function test_disable_refuses_an_order_with_an_open_allocation(): void
     {
-        [$workOrder] = $this->inFlightOrder([
-            'print_note' => 'keep me',
-            'material_settlement' => [
-                'mode' => MaterialSettlementPolicy::MODE_OPERATION,
-                'materials' => [$this->carton->id],
-                'enabled_by' => $this->admin->id,
-                'enabled_at' => '2026-11-20T10:00:00+00:00',
-            ],
-        ]);
+        [$workOrder, $material] = $this->inFlightOrder(['print_note' => 'keep me'], pilot: true);
 
         $before = $workOrder->fresh()->extra_data;
 
@@ -747,8 +751,65 @@ class MaterialSettlementScopeTest extends TestCase
         $this->assertSame('keep me', $after['print_note']);
         $this->assertSame(
             MaterialSettlementPolicy::MODE_OPERATION,
-            app(MaterialSettlementPolicy::class)->modeFor($workOrder->fresh(), $this->carton->id),
+            app(MaterialSettlementPolicy::class)->modeFor($workOrder->fresh(), $material->id),
         );
+    }
+
+    public function test_disable_refuses_while_an_open_allocation_keeps_the_pilot_mode(): void
+    {
+        [$workOrder] = $this->inFlightOrder([
+            // The scope on the order names another component — the open row is
+            // a pilot row because of the mode frozen on it, not the order.
+            'material_settlement' => [
+                'mode' => MaterialSettlementPolicy::MODE_OPERATION,
+                'materials' => [$this->carton->id],
+                'enabled_by' => $this->admin->id,
+                'enabled_at' => '2026-11-20T10:00:00+00:00',
+            ],
+        ]);
+
+        MaterialAllocation::query()
+            ->where('work_order_id', $workOrder->id)
+            ->where('status', MaterialAllocation::STATUS_ALLOCATED)
+            ->update(['settlement_mode' => MaterialSettlementPolicy::MODE_OPERATION]);
+
+        $this->assertTrue($this->scope()->hasOpenPilotAllocation($workOrder));
+
+        try {
+            $this->scope()->disable($workOrder->fresh(), $this->admin);
+            $this->fail('An open pilot withdrawal must keep the scope on.');
+        } catch (\DomainException $exception) {
+            $this->assertStringContainsString(MaterialSettlementScope::ERROR_WORK_ORDER_IN_FLIGHT, $exception->getMessage());
+        }
+
+        $this->assertSame(
+            MaterialSettlementPolicy::MODE_OPERATION,
+            $workOrder->fresh()->extra_data['material_settlement']['mode'],
+        );
+    }
+
+    public function test_disable_is_allowed_under_an_open_legacy_allocation(): void
+    {
+        [$workOrder] = $this->inFlightOrder([
+            'material_settlement' => [
+                'mode' => MaterialSettlementPolicy::MODE_OPERATION,
+                'materials' => [$this->carton->id],
+                'enabled_by' => $this->admin->id,
+                'enabled_at' => '2026-11-20T10:00:00+00:00',
+            ],
+        ]);
+
+        // The withdrawal still open is for a component outside the scope and
+        // never froze a mode: it settles the legacy way and never depended on
+        // the pilot, so it must not hold the switch.
+        $this->assertTrue($this->scope()->hasOpenAllocation($workOrder));
+        $this->assertFalse($this->scope()->hasOpenPilotAllocation($workOrder));
+
+        $updated = $this->scope()->disable($workOrder->fresh(), $this->admin);
+
+        $extra = $updated->fresh()->extra_data;
+        $this->assertSame(MaterialSettlementPolicy::MODE_LEGACY, $extra['material_settlement']['mode']);
+        $this->assertSame($this->admin->id, (int) $extra['material_settlement']['disabled_by']);
     }
 
     public function test_disable_works_once_the_allocation_is_settled(): void

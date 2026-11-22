@@ -595,9 +595,18 @@ class MaterialAllocationService
         }
 
         $workOrder = $allocation->workOrder;
-        $pilot = $workOrder !== null
-            && app(MaterialSettlementPolicy::class)
-                ->modeFor($workOrder, (int) $allocation->material_id) === MaterialSettlementPolicy::MODE_OPERATION;
+
+        // The terms of this confirmation, read once from the scope the order
+        // carries right now and frozen on the allocation (RQ-PA-265 A7). A
+        // correction later reads them from here, so switching the pilot off
+        // after the withdrawal settled never rewrites what was signed. An
+        // allocation without an order has no pilot scope, so it settles the
+        // legacy way — that is the declared policy, not a fallback.
+        $settlementMode = $workOrder !== null
+            ? app(MaterialSettlementPolicy::class)->modeFor($workOrder, (int) $allocation->material_id)
+            : MaterialSettlementPolicy::MODE_LEGACY;
+
+        $pilot = $settlementMode === MaterialSettlementPolicy::MODE_OPERATION;
 
         if ($pilot && $user === null) {
             throw new \DomainException(__('A pilot consumption needs the operator who declared it.'));
@@ -609,11 +618,14 @@ class MaterialAllocationService
         $source ??= $recordEvidence ? self::SOURCE_OPERATOR : null;
 
         try {
-            return DB::transaction(function () use ($allocation, $actualConsumed, $scrap, $user, $source, $key, $recordEvidence) {
+            return DB::transaction(function () use ($allocation, $actualConsumed, $scrap, $user, $source, $key, $recordEvidence, $settlementMode) {
                 $attributes = [
                     'consumed_qty' => $actualConsumed,
                     'consumption_recorded' => true,
                     'scrap_qty' => $scrap,
+                    // Frozen with the confirmation, whatever scope the call
+                    // came from and whether or not anyone signed it.
+                    'settlement_mode' => $settlementMode,
                     // Snapshot the price so historical cost reports stay stable.
                     'unit_price_snapshot' => $actualConsumed > 0 ? $allocation->material?->unit_price : null,
                     'price_currency_snapshot' => $actualConsumed > 0 ? $allocation->material?->price_currency : null,
@@ -704,11 +716,14 @@ class MaterialAllocationService
      * approve its correction, whatever their role. Whether the approver may review
      * at all is the `approve work order changes` right, enforced on the route.
      *
-     * Only the pilot scope has a correction path: in the legacy scope the batch
-     * settled with the plan and there is no operation confirmation to correct. A
-     * line still waiting for settlement closes through `consume`/`settle` first —
-     * correcting it here would post a compensation against a number that was never
-     * confirmed.
+     * Only a line settled by its operation has a correction path: the mode frozen
+     * on the allocation when the retrieval was confirmed decides it, so switching
+     * the pilot off afterwards changes nothing (RQ-PA-265 A7). A legacy line
+     * settled with the plan and has no operation confirmation to correct; a line
+     * whose terms were never frozen (confirmed before the mode was recorded) has
+     * none either. A line still waiting for settlement closes through
+     * `consume`/`settle` first — correcting it here would post a compensation
+     * against a number that was never confirmed.
      *
      * A key already on record makes the call a replay (same row, same quantities,
      * nothing booked again); the same key against other quantities or another
@@ -832,21 +847,38 @@ class MaterialAllocationService
      */
     private function assertCorrectable(MaterialAllocation $allocation, User $approver): void
     {
-        $workOrder = $allocation->workOrder;
+        // The terms are read from the allocation, where the confirmation froze
+        // them (RQ-PA-265 A7) — never from the work order. Asking the order
+        // would refuse a correction the moment the pilot is switched off, which
+        // the rule allows as soon as the withdrawal has settled.
+        $settlementMode = $allocation->settlement_mode;
 
-        if ($workOrder === null
-            || app(MaterialSettlementPolicy::class)
-                ->modeFor($workOrder, (int) $allocation->material_id) !== MaterialSettlementPolicy::MODE_OPERATION) {
+        // A legacy line never has a correction path, whatever its stage: the
+        // batch settled with the plan, so there is no operation confirmation to
+        // correct (the legacy scope keeps its own tools).
+        if ($settlementMode === MaterialSettlementPolicy::MODE_LEGACY) {
             throw new MaterialCorrectionException(
                 MaterialCorrectionException::NOT_APPLICABLE,
                 __('This allocation is not settled by its operation — there is nothing to correct.'),
             );
         }
 
+        // Still open — nothing was settled, or nothing was frozen yet: the line
+        // closes through `consume`/`settle` first. Correcting it here would post
+        // a compensation against a number that was never confirmed.
         if ($allocation->status !== MaterialAllocation::STATUS_CONSUMED) {
             throw new MaterialCorrectionException(
                 MaterialCorrectionException::REQUIRES_SETTLED,
                 __('The settlement has not been posted yet: settle it first, then correct it.'),
+            );
+        }
+
+        // Settled with no frozen terms: a confirmation from before the mode was
+        // recorded. There is no declared scope to hold the correction to.
+        if ($settlementMode === null) {
+            throw new MaterialCorrectionException(
+                MaterialCorrectionException::NOT_APPLICABLE,
+                __('This allocation carries no frozen pilot settlement mode (it was confirmed before the mode was recorded) — there is nothing to correct.'),
             );
         }
 

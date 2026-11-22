@@ -125,7 +125,16 @@ class MaterialPilotCommandTest extends TestCase
         ]);
     }
 
-    /** The same order, with its component already withdrawn by a started batch. */
+    /**
+     * The same order, with its component already withdrawn by a started batch
+     * and the withdrawal still owed a settlement.
+     *
+     * Only the piece is a pilot withdrawal: it is the component the cutting
+     * operation consumes, and its confirmation froze the `operation` mode on the
+     * row while the row is still `allocated`. The carton is bought per carton,
+     * sits outside the pilot scope and must not make the fixture pass for the
+     * wrong reason.
+     */
     private function inFlightWorkOrder(): WorkOrder
     {
         $workOrder = $this->workOrder();
@@ -139,10 +148,16 @@ class MaterialPilotCommandTest extends TestCase
             $operator,
         );
 
+        $pilotRows = MaterialAllocation::query()
+            ->where('work_order_id', $workOrder->id)
+            ->where('material_id', $this->piece->id)
+            ->where('status', MaterialAllocation::STATUS_ALLOCATED)
+            ->update(['settlement_mode' => MaterialSettlementPolicy::MODE_OPERATION]);
+
         $this->assertGreaterThan(
             0,
-            MaterialAllocation::query()->where('work_order_id', $workOrder->id)->count(),
-            'The fixture must actually withdraw the material.',
+            $pilotRows,
+            'The fixture must leave an open pilot withdrawal of the component.',
         );
 
         return $workOrder->fresh();
