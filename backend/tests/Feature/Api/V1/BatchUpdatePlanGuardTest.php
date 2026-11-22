@@ -230,4 +230,130 @@ class BatchUpdatePlanGuardTest extends TestCase
 
         $this->storeBatch(10)->assertStatus(201);
     }
+
+    // ── Lock proof (RQ-PA-273) ────────────────────────────────────────────
+    //
+    // SQLite cannot render `for update` (`SQLiteGrammar::compileLock` returns an
+    // empty string), so the lock clause itself is invisible here. Its
+    // precondition is not: the work order row is read *inside a transaction*
+    // before the plan is projected, which is exactly what queues a sibling
+    // request on the same row in PostgreSQL. Before RQ-PA-273 the projection
+    // summed the batches with no work-order read at all, so two concurrent
+    // calls both passed the check and together overshot the plan.
+
+    /** The first statement index matching `$matches`, or null when absent. */
+    private function firstStatement(array $statements, callable $matches): ?int
+    {
+        foreach ($statements as $index => $sql) {
+            if ($matches($sql)) {
+                return $index;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Index of the first work_orders read that happens inside a transaction of
+     * its own (`$outerLevel` is the level the request starts at - the test suite
+     * itself runs inside one), i.e. the row lock the projection and the write
+     * share.
+     */
+    private function firstLockedOrderRead(array $statements, array $levels, int $outerLevel): ?int
+    {
+        foreach ($statements as $index => $sql) {
+            if ($levels[$index] > $outerLevel
+                && str_starts_with($sql, 'select')
+                && str_contains($sql, 'from "work_orders"')) {
+                return $index;
+            }
+        }
+
+        return null;
+    }
+
+    private function isPlanProjection(string $sql): bool
+    {
+        return str_starts_with($sql, 'select')
+            && str_contains($sql, 'from "batches"')
+            && str_contains($sql, 'sum(');
+    }
+
+    public function test_store_reads_the_work_order_under_a_lock_before_it_plans_and_inserts(): void
+    {
+        $this->createBatch(8, 1);
+
+        $outerLevel = DB::transactionLevel();
+        $statements = [];
+        $levels = [];
+        DB::listen(function ($query) use (&$statements, &$levels): void {
+            $statements[] = strtolower($query->sql);
+            $levels[] = DB::transactionLevel();
+        });
+
+        $this->storeBatch(2)->assertStatus(201);
+
+        $lockedOrderRead = $this->firstLockedOrderRead($statements, $levels, $outerLevel);
+        $planProjection = $this->firstStatement($statements, $this->isPlanProjection(...));
+        $batchInsert = $this->firstStatement($statements, fn (string $sql) => str_contains($sql, 'insert into "batches"'));
+
+        $this->assertNotNull($lockedOrderRead, 'store() must read the work order row under a lock');
+        $this->assertNotNull($planProjection, 'the plan projection has to run');
+        $this->assertNotNull($batchInsert, 'the batch has to be written');
+
+        $this->assertLessThan($planProjection, $lockedOrderRead, 'the plan is projected only under the work-order lock');
+        $this->assertLessThan($batchInsert, $lockedOrderRead, 'the batch is written only under the work-order lock');
+        $this->assertGreaterThan($outerLevel, $levels[$planProjection], 'the projection must read inside the transaction that holds the lock');
+        $this->assertGreaterThan($outerLevel, $levels[$batchInsert], 'the insert must land inside the transaction that holds the lock');
+    }
+
+    public function test_update_reads_the_work_order_under_a_lock_before_the_guard_and_the_write(): void
+    {
+        $this->createBatch(8, 1);
+        $batch = $this->createBatch(1, 2);
+
+        $outerLevel = DB::transactionLevel();
+        $statements = [];
+        $levels = [];
+        DB::listen(function ($query) use (&$statements, &$levels): void {
+            $statements[] = strtolower($query->sql);
+            $levels[] = DB::transactionLevel();
+        });
+
+        $this->updateBatch($batch, 2)->assertStatus(200);
+
+        $lockedOrderRead = $this->firstLockedOrderRead($statements, $levels, $outerLevel);
+        $planProjection = $this->firstStatement($statements, $this->isPlanProjection(...));
+        $batchWrite = $this->firstStatement($statements, fn (string $sql) => str_contains($sql, 'update "batches"'));
+
+        $this->assertNotNull($lockedOrderRead, 'update() must read the work order row under a lock');
+        $this->assertNotNull($planProjection, 'the plan projection has to run');
+        $this->assertNotNull($batchWrite, 'the accepted change has to be written');
+
+        $this->assertLessThan($planProjection, $lockedOrderRead, 'the plan is projected only under the work-order lock');
+        $this->assertLessThan($batchWrite, $lockedOrderRead, 'the batch is written only under the work-order lock');
+        $this->assertGreaterThan($outerLevel, $levels[$planProjection], 'the projection must read inside the transaction that holds the lock');
+        $this->assertGreaterThan($outerLevel, $levels[$batchWrite], 'the write must land inside the transaction that holds the lock');
+    }
+
+    public function test_a_refused_raise_writes_nothing_after_the_locked_check(): void
+    {
+        $this->createBatch(8, 1);
+        $batch = $this->createBatch(1, 2);
+
+        $statements = [];
+        DB::listen(function ($query) use (&$statements): void {
+            $statements[] = strtolower($query->sql);
+        });
+
+        $this->updateBatch($batch, 3)
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Total batch quantity would exceed planned quantity (11 of 10)');
+
+        $this->assertSame(
+            0,
+            count(array_filter($statements, fn (string $sql) => str_contains($sql, 'update "batches"'))),
+            'a refused raise must not touch the batch row',
+        );
+    }
 }

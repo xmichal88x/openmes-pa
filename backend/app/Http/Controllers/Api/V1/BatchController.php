@@ -11,7 +11,7 @@ use App\Models\SerialUnit;
 use App\Models\WorkOrder;
 use App\Services\Lot\BatchReleaseService;
 use App\Services\Material\MaterialAllocationService;
-use App\Services\Settings\RuntimeSettings;
+use App\Services\WorkOrder\BatchPlanGuard;
 use App\Services\WorkOrder\WorkOrderService;
 use App\Support\ApiValidationError;
 use Illuminate\Http\JsonResponse;
@@ -20,14 +20,11 @@ use Illuminate\Support\Facades\DB;
 
 class BatchController extends Controller
 {
-    /** Plan comparison tolerance: quantities are decimal, so exact equality is not a test. */
-    private const PLANNED_QTY_TOLERANCE = 0.001;
-
     public function __construct(
         protected WorkOrderService $workOrderService,
         protected BatchReleaseService $releaseService,
         protected MaterialAllocationService $allocationService,
-        protected RuntimeSettings $runtimeSettings,
+        protected BatchPlanGuard $planGuard,
     ) {}
 
     /**
@@ -79,28 +76,40 @@ class BatchController extends Controller
             'lot_number' => 'nullable|string|max:50',
         ]);
 
-        // Check if adding this batch would exceed planned qty (see
-        // projectedPlannedBatchTotal for which batches count).
-        $totalTargetQty = $this->projectedPlannedBatchTotal($workOrder, (float) $validated['target_qty']);
-
-        if ($this->exceedsPlannedQty($workOrder, $totalTargetQty)) {
-            return response()->json([
-                'message' => 'Total batch quantity would exceed planned quantity',
-            ], 422);
-        }
-
         // Check workstation conflicts (soft warning in response)
         $conflicts = [];
         if (! empty($validated['workstation_id'])) {
             $conflicts = $this->releaseService->checkWorkstationConflicts($validated['workstation_id']);
         }
 
-        $batch = $this->workOrderService->createBatch(
-            $workOrder,
-            $validated['target_qty'],
-            $validated['workstation_id'] ?? null,
-            $validated['lot_number'] ?? null,
-        );
+        // The plan projection and the write it guards are one decision under the
+        // work-order row lock (RQ-PA-273): without it two concurrent POSTs read
+        // the same committed sum and together overshoot `planned_qty`, each
+        // having seen a plan that was still within limits. Lock order is
+        // work order -> batches, the same order createBatch() takes.
+        $batch = DB::transaction(function () use ($workOrder, $validated) {
+            $workOrder = WorkOrder::whereKey($workOrder->getKey())->lockForUpdate()->firstOrFail();
+
+            // See BatchPlanGuard::projectedTotal for which batches count. A
+            // refusal is returned, not thrown: the caller answers 422 with the
+            // published message.
+            if ($this->planGuard->exceeds($workOrder, (float) $validated['target_qty'])) {
+                return null;
+            }
+
+            return $this->workOrderService->createBatch(
+                $workOrder,
+                $validated['target_qty'],
+                $validated['workstation_id'] ?? null,
+                $validated['lot_number'] ?? null,
+            );
+        });
+
+        if ($batch === null) {
+            return response()->json([
+                'message' => 'Total batch quantity would exceed planned quantity',
+            ], 422);
+        }
 
         $response = [
             'message' => 'Batch created successfully',
@@ -273,94 +282,63 @@ class BatchController extends Controller
             'reason' => ['nullable', 'string', 'max:500'],
         ]);
 
-        $workOrder = $batch->workOrder;
         $newQty = (float) $validated['target_qty'];
+        $reason = trim((string) ($validated['reason'] ?? ''));
 
-        // A replacement (re-cut) lives outside the plan: its size never counts
-        // against `planned_qty`, exactly as in recut(). Legacy NULL reads as
-        // "not a replacement", so it is guarded like a planned batch.
-        if (! $batch->is_replacement) {
-            // The edited batch already sits in the sum, so it is projected with
-            // its new value instead of being counted twice.
-            $projectedTotal = $this->projectedPlannedBatchTotal($workOrder, $newQty, $batch);
+        // The plan check and the write are one decision under the work-order row
+        // lock (RQ-PA-273); a PATCH that reads the sum outside it races a POST
+        // doing the same. Lock order is work order -> batch, as everywhere else.
+        $message = DB::transaction(function () use ($request, $batch, $newQty, $reason) {
+            $workOrder = WorkOrder::whereKey($batch->work_order_id)->lockForUpdate()->firstOrFail();
+            $locked = Batch::whereKey($batch->getKey())->lockForUpdate()->firstOrFail();
 
-            if ($this->exceedsPlannedQty($workOrder, $projectedTotal)) {
-                return response()->json([
-                    'message' => sprintf(
-                        'Total batch quantity would exceed planned quantity (%s of %s)',
-                        self::formatQty($projectedTotal),
-                        self::formatQty((float) $workOrder->planned_qty),
-                    ),
-                ], 422);
+            // The locked row decides, not the caller's copy read before the lock.
+            if ($locked->status !== Batch::STATUS_PENDING) {
+                return 'Only PENDING batches can be updated.';
             }
-        }
 
-        $previousQty = (float) $batch->target_qty;
+            // A replacement (re-cut) lives outside the plan: its size never counts
+            // against `planned_qty`, exactly as in recut(). Legacy NULL reads as
+            // "not a replacement", so it is guarded like a planned batch.
+            if (! $locked->is_replacement && $this->planGuard->exceeds($workOrder, $newQty, $locked)) {
+                // The edited batch already sits in the sum, so it is projected with
+                // its new value instead of being counted twice.
+                return $this->planGuard->message(
+                    $workOrder,
+                    $this->planGuard->projectedTotal($workOrder, $newQty, $locked),
+                );
+            }
 
-        // An unchanged quantity is not a change: no write and no audit entry,
-        // the same rule the step-quantity correction follows.
-        if (abs($previousQty - $newQty) >= self::PLANNED_QTY_TOLERANCE) {
-            $reason = trim((string) ($validated['reason'] ?? ''));
+            $previousQty = (float) $locked->target_qty;
 
-            DB::transaction(function () use ($request, $batch, $newQty, $previousQty, $reason) {
-                $batch->update(['target_qty' => $newQty]);
+            // An unchanged quantity is not a change: no write and no audit entry,
+            // the same rule the step-quantity correction follows.
+            if (abs($previousQty - $newQty) >= BatchPlanGuard::TOLERANCE) {
+                $locked->update(['target_qty' => $newQty]);
 
                 // `reason` is optional, so a caller that gave none is recorded
                 // as null: the audit states what was asked, not a guessed motive.
                 AuditLog::create([
                     'user_id' => $request->user()?->id,
                     'entity_type' => Batch::class,
-                    'entity_id' => $batch->id,
+                    'entity_id' => $locked->id,
                     'action' => 'batch_target_qty_updated',
                     'before_state' => ['target_qty' => $previousQty],
                     'after_state' => ['target_qty' => $newQty, 'reason' => $reason === '' ? null : $reason],
                 ]);
-            });
+            }
+
+            return null;
+        });
+
+        if ($message !== null) {
+            return response()->json(['message' => $message], 422);
         }
 
         return response()->json([
             'message' => 'Batch updated',
             'data' => $batch->fresh(['steps']),
         ]);
-    }
-
-    /**
-     * The planned total a work order would carry once `$additionalQty` is added.
-     *
-     * Replacement batches (re-cuts, RQ-PA-214) live outside the plan and
-     * cancelled batches no longer consume capacity, so neither counts toward the
-     * sum. Legacy rows may have a NULL is_replacement, which must still count.
-     * When a batch itself is being edited it is already inside the sum, so it is
-     * excluded and re-added as `$additionalQty` rather than counted twice.
-     */
-    private function projectedPlannedBatchTotal(WorkOrder $workOrder, float $additionalQty, ?Batch $exclude = null): float
-    {
-        $sum = $workOrder->batches()
-            ->where(fn ($query) => $query->whereNull('is_replacement')->orWhere('is_replacement', false))
-            ->where('status', '!=', Batch::STATUS_CANCELLED)
-            ->when($exclude !== null, fn ($query) => $query->where('id', '!=', $exclude->getKey()))
-            ->sum('target_qty');
-
-        return (float) $sum + $additionalQty;
-    }
-
-    /**
-     * Whether the projected total overshoots the plan by more than the qty
-     * tolerance. The stored switch decides (Settings -> System), with the env var
-     * only as the declared default when nothing is stored - see RuntimeSettings.
-     */
-    private function exceedsPlannedQty(WorkOrder $workOrder, float $projectedTotal): bool
-    {
-        if ($this->runtimeSettings->allowOverproduction()) {
-            return false;
-        }
-
-        return ($projectedTotal - (float) $workOrder->planned_qty) > self::PLANNED_QTY_TOLERANCE;
-    }
-
-    private static function formatQty(float $qty): string
-    {
-        return rtrim(rtrim(number_format($qty, 3, '.', ''), '0'), '.');
     }
 
     /**

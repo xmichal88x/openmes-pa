@@ -24,10 +24,12 @@ use App\Services\Media\ImageSanitizer;
 use App\Services\Production\PackagingChecklistService;
 use App\Services\Production\ProcessConfirmationService;
 use App\Services\Production\QualityCheckService;
+use App\Services\WorkOrder\BatchPlanGuard;
 use App\Services\WorkOrder\BatchService;
 use App\Services\WorkOrder\StartPreflightService;
 use App\Services\WorkOrder\WorkOrderService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class BatchController extends Controller
 {
@@ -41,6 +43,7 @@ class BatchController extends Controller
         protected BatchService $batchService,
         protected MaterialAllocationService $allocationService,
         protected StartPreflightService $startPreflightService,
+        protected BatchPlanGuard $planGuard,
     ) {}
 
     /**
@@ -536,12 +539,34 @@ class BatchController extends Controller
                 $lotNumber = $this->lotService->generateLot($workOrder->productType);
             }
 
-            $this->workOrderService->createBatch(
-                $workOrder,
-                $request->input('target_qty'),
-                $request->input('workstation_id'),
-                $lotNumber,
-            );
+            // The same plan rule the API applies (RQ-PA-273): this path used to
+            // bypass it entirely, so an operator could add batches past the
+            // order's planned quantity. Projection and write share the work-order
+            // row lock, exactly as in Api\V1\BatchController::store.
+            $planMessage = DB::transaction(function () use ($request, $workOrder, $lotNumber) {
+                $workOrder = WorkOrder::whereKey($workOrder->getKey())->lockForUpdate()->firstOrFail();
+                $targetQty = (float) $request->input('target_qty');
+
+                if ($this->planGuard->exceeds($workOrder, $targetQty)) {
+                    return $this->planGuard->message(
+                        $workOrder,
+                        $this->planGuard->projectedTotal($workOrder, $targetQty),
+                    );
+                }
+
+                $this->workOrderService->createBatch(
+                    $workOrder,
+                    $request->input('target_qty'),
+                    $request->input('workstation_id'),
+                    $lotNumber,
+                );
+
+                return null;
+            });
+
+            if ($planMessage !== null) {
+                return back()->with('error', $planMessage)->withInput();
+            }
 
             return redirect()->route('operator.work-order.detail', $workOrder)
                 ->with('success', $lotNumber ? __('Batch created (LOT: :lot)', ['lot' => $lotNumber]) : __('Batch created'));
