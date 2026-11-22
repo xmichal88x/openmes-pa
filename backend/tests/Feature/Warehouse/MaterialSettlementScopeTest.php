@@ -590,6 +590,67 @@ class MaterialSettlementScopeTest extends TestCase
         $this->assertSame([$this->piece->id], $extra['material_settlement']['materials']);
     }
 
+    public function test_enabling_writes_one_audit_entry_not_two(): void
+    {
+        $workOrder = $this->workOrder();
+
+        $this->scope()->enable($workOrder, [$this->piece->id], $this->admin);
+
+        // The model trait already writes the entry here, so the console
+        // fallback must stay silent — two rows would read as two decisions.
+        $this->assertSame(
+            1,
+            AuditLog::query()
+                ->where('entity_type', WorkOrder::class)
+                ->where('entity_id', $workOrder->id)
+                ->where('action', 'updated')
+                ->count(),
+        );
+    }
+
+    public function test_the_console_audit_entry_names_the_actor_and_the_scope(): void
+    {
+        // PHPUnit always runs as unit tests, so the console branch of the
+        // service cannot be reached through enable() here; the entry itself is
+        // exercised directly, without depending on the environment.
+        $consoleScope = new class extends MaterialSettlementScope
+        {
+            /**
+             * @param  array<string, mixed>  $before
+             */
+            public function writeConsoleAudit(WorkOrder $workOrder, User $actor, array $before): void
+            {
+                $this->recordConsoleAudit($workOrder, $actor, $before);
+            }
+        };
+
+        $workOrder = $this->workOrder(['print_note' => 'keep me']);
+        $before = $workOrder->extra_data;
+
+        $consoleScope->enable($workOrder, [$this->piece->id], $this->admin);
+        $consoleScope->writeConsoleAudit($workOrder->fresh(), $this->admin, $before);
+
+        $logs = AuditLog::query()
+            ->where('entity_type', WorkOrder::class)
+            ->where('entity_id', $workOrder->id)
+            ->where('action', 'updated')
+            ->where('user_agent', 'console')
+            ->get();
+
+        $this->assertCount(1, $logs, 'A console change must leave exactly one audit entry.');
+
+        $log = $logs->first();
+        $this->assertSame($this->admin->id, (int) $log->user_id);
+        $this->assertSame(['extra_data' => $before], $log->before_state);
+        $this->assertNull($log->ip_address);
+        $this->assertSame(
+            MaterialSettlementPolicy::MODE_OPERATION,
+            $log->after_state['extra_data']['material_settlement']['mode'],
+        );
+        $this->assertSame([$this->piece->id], $log->after_state['extra_data']['material_settlement']['materials']);
+        $this->assertSame($this->admin->id, (int) $log->after_state['extra_data']['material_settlement']['enabled_by']);
+    }
+
     public function test_enable_refuses_an_empty_selection(): void
     {
         $workOrder = $this->workOrder();

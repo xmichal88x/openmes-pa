@@ -2,6 +2,7 @@
 
 namespace App\Services\Material;
 
+use App\Models\AuditLog;
 use App\Models\BomItem;
 use App\Models\Material;
 use App\Models\MaterialAllocation;
@@ -213,7 +214,8 @@ class MaterialSettlementScope
             ));
         }
 
-        $extraData = $this->extraData($workOrder);
+        $before = $this->extraData($workOrder);
+        $extraData = $before;
         $extraData[MaterialSettlementPolicy::EXTRA_DATA_KEY] = [
             'mode' => MaterialSettlementPolicy::MODE_OPERATION,
             'materials' => $ids,
@@ -223,6 +225,8 @@ class MaterialSettlementScope
 
         // One update, so the model's audit trait records the whole decision.
         $workOrder->update(['extra_data' => $extraData]);
+
+        $this->recordConsoleAuditIfSkipped($workOrder, $actor, $before);
 
         return $workOrder;
     }
@@ -244,7 +248,8 @@ class MaterialSettlementScope
     {
         $this->guardDisable($workOrder);
 
-        $extraData = $this->extraData($workOrder);
+        $before = $this->extraData($workOrder);
+        $extraData = $before;
         $extraData[MaterialSettlementPolicy::EXTRA_DATA_KEY] = [
             'mode' => MaterialSettlementPolicy::MODE_LEGACY,
             'disabled_by' => (int) $actor->id,
@@ -252,6 +257,8 @@ class MaterialSettlementScope
         ];
 
         $workOrder->update(['extra_data' => $extraData]);
+
+        $this->recordConsoleAuditIfSkipped($workOrder, $actor, $before);
 
         return $workOrder;
     }
@@ -305,6 +312,47 @@ class MaterialSettlementScope
                 'order_no' => $workOrder->order_no,
             ]),
         ));
+    }
+
+    /**
+     * Write the audit entry the model trait omits in a console run.
+     *
+     * `Auditable::createAuditLog()` returns early whenever the app runs in the
+     * console and is not running unit tests, so a scope changed by
+     * `material:pilot` would leave no row in `audit_logs` — only the
+     * `enabled_by`/`enabled_at` pair on the order, which says nothing about who
+     * replaced an earlier author. The HTTP path is untouched: there the trait
+     * already writes the entry, and writing it twice would fake two changes.
+     *
+     * @param  array<string, mixed>  $before  `extra_data` as it was before the update
+     */
+    private function recordConsoleAuditIfSkipped(WorkOrder $workOrder, User $actor, array $before): void
+    {
+        if (! (app()->runningInConsole() && ! app()->runningUnitTests())) {
+            return;
+        }
+
+        $this->recordConsoleAudit($workOrder, $actor, $before);
+    }
+
+    /**
+     * The console audit entry: same entity and action the trait would record,
+     * attributed to the actor the caller resolved, with the console as the client.
+     *
+     * @param  array<string, mixed>  $before
+     */
+    protected function recordConsoleAudit(WorkOrder $workOrder, User $actor, array $before): void
+    {
+        AuditLog::create([
+            'user_id' => (int) $actor->id,
+            'entity_type' => WorkOrder::class,
+            'entity_id' => $workOrder->id,
+            'action' => 'updated',
+            'before_state' => ['extra_data' => $before],
+            'after_state' => ['extra_data' => $workOrder->fresh()->extra_data],
+            'ip_address' => null,
+            'user_agent' => 'console',
+        ]);
     }
 
     /**

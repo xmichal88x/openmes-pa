@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Console;
 
+use App\Models\AuditLog;
 use App\Models\BomItem;
 use App\Models\Material;
 use App\Models\MaterialAllocation;
@@ -237,6 +238,66 @@ class MaterialPilotCommandTest extends TestCase
         $extra = $workOrder->fresh()->extra_data;
         $this->assertSame(MaterialSettlementPolicy::MODE_LEGACY, $extra['material_settlement']['mode']);
         $this->assertSame($this->admin->id, $extra['material_settlement']['disabled_by']);
+    }
+
+    public function test_a_console_run_is_audited_even_though_the_trait_skips_it(): void
+    {
+        $workOrder = $this->workOrder();
+
+        // What a real `php artisan material:pilot` sees: console, not unit
+        // tests. The model's audit trait returns early here, so the service has
+        // to leave the row itself.
+        $this->app->instance('env', 'production');
+
+        try {
+            $this->artisan('material:pilot', [
+                'order_no' => $workOrder->order_no,
+                '--enable' => [$this->piece->code],
+            ])->assertExitCode(0);
+        } finally {
+            $this->app->instance('env', 'testing');
+        }
+
+        $logs = AuditLog::query()
+            ->where('entity_type', WorkOrder::class)
+            ->where('entity_id', $workOrder->id)
+            ->where('action', 'updated')
+            ->get();
+
+        $this->assertCount(1, $logs, 'The console change must leave exactly one audit entry.');
+
+        $log = $logs->first();
+        $this->assertSame($this->admin->id, (int) $log->user_id, 'The entry names the actor the command wrote against.');
+        $this->assertSame('console', $log->user_agent);
+        $this->assertNull($log->ip_address);
+        $this->assertSame([], $log->before_state['extra_data']);
+        $this->assertSame(
+            MaterialSettlementPolicy::MODE_OPERATION,
+            $log->after_state['extra_data']['material_settlement']['mode'],
+        );
+        $this->assertSame([$this->piece->id], $log->after_state['extra_data']['material_settlement']['materials']);
+    }
+
+    public function test_a_console_run_of_the_command_leaves_no_duplicate_audit_entry(): void
+    {
+        $workOrder = $this->workOrder();
+
+        // The unit-test environment keeps the trait writing, so the console
+        // fallback must not add a second row for the same change.
+        $this->artisan('material:pilot', [
+            'order_no' => $workOrder->order_no,
+            '--enable' => [$this->piece->code],
+        ])->assertExitCode(0);
+
+        $this->assertSame(
+            0,
+            AuditLog::query()
+                ->where('entity_type', WorkOrder::class)
+                ->where('entity_id', $workOrder->id)
+                ->where('user_agent', 'console')
+                ->count(),
+            'The fallback must stay silent when the trait already wrote the entry.',
+        );
     }
 
     public function test_disabling_in_flight_is_refused_and_writes_nothing(): void
