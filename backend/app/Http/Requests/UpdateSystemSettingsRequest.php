@@ -34,15 +34,38 @@ class UpdateSystemSettingsRequest extends FormRequest
 
     public function after(): array
     {
-        return [function (\Illuminate\Validation\Validator $validator) {
-            if (! is_string($this->input('production_flow_mode'))) {
-                return;
-            }
-            $sources = app(\App\Services\Machine\MachineCountingCompatibility::class)->transitionBlockers($this->input('production_flow_mode'));
-            if ($sources) {
-                $validator->errors()->add('production_flow_mode', __('Resolve these requirements before changing production flow: :sources', ['sources' => implode(', ', $sources)]));
-            }
-        }];
+        return [
+            function (\Illuminate\Validation\Validator $validator) {
+                if (! is_string($this->input('production_flow_mode'))) {
+                    return;
+                }
+                $sources = app(\App\Services\Machine\MachineCountingCompatibility::class)->transitionBlockers($this->input('production_flow_mode'));
+                if ($sources) {
+                    $validator->errors()->add('production_flow_mode', __('Resolve these requirements before changing production flow: :sources', ['sources' => implode(', ', $sources)]));
+                }
+            },
+            // The hold can only be switched on when the level it compares a
+            // demand against exists for every material the active recipes
+            // consume. Otherwise the first batch parks on an unknown balance and
+            // the operator reads a shortage nobody can confirm (F1-2/F1-3).
+            function (\Illuminate\Validation\Validator $validator) {
+                if (! filter_var($this->input('hold_on_material_shortage'), FILTER_VALIDATE_BOOLEAN)) {
+                    return;
+                }
+
+                $coverage = app(\App\Services\Material\MaterialBalanceCoverage::class);
+                $undeclared = $coverage->undeclaredInActiveRecipes();
+
+                if ($undeclared === []) {
+                    return;
+                }
+
+                $validator->errors()->add('hold_on_material_shortage', __(
+                    'The shortage hold cannot be switched on: some materials in the active recipes have no declared balance — :items. Declare the balance from the ERP or as an opening declaration first; do not switch the hold on over an unknown balance.',
+                    ['items' => $coverage->describe($undeclared)],
+                ));
+            },
+        ];
     }
 
     /**
