@@ -37,6 +37,9 @@ class AllocationAccountingTest extends TestCase
             'material_type_id' => $type->id,
             'unit_of_measure' => 'kg',
             'stock_quantity' => 500,
+            // Declared, so the preview compares the plan against a real number.
+            'stock_owner' => Material::STOCK_OWNER_ERP,
+            'balance_source' => Material::BALANCE_SOURCE_OPENING_DECLARED,
         ]);
 
         $productType = ProductType::factory()->create();

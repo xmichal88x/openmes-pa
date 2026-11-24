@@ -25,6 +25,15 @@ class Material extends Model
 
     public const STOCK_OWNER_UNKNOWN = 'unknown';
 
+    /** How far the declared balance can be trusted (F1-3). */
+    public const BALANCE_STATE_OK = 'ok';
+
+    public const BALANCE_STATE_STALE = 'stale';
+
+    public const BALANCE_STATE_DEMO_SEED = 'demo_seed';
+
+    public const BALANCE_STATE_UNKNOWN = 'unknown';
+
     /** Where the declared balance number came from. */
     public const BALANCE_SOURCE_ERP_PROJECTION = 'erp_projection';
 
@@ -146,6 +155,33 @@ class Material extends Model
         };
 
         return in_array($this->balance_source, $sources, true);
+    }
+
+    /**
+     * What can be said about this SKU's balance right now: a declared number is
+     * `ok`, a read that has aged out is `stale`, a seeded demo row is
+     * `demo_seed`, and everything else — ownership unknown, a source that does
+     * not count for the owner, no declaration at all — is `unknown`.
+     *
+     * The distinction exists so callers can say "we do not know" instead of
+     * publishing a zero that reads as "we checked and there is nothing".
+     */
+    public function balanceState(): string
+    {
+        if ($this->hasDeclaredBalance()) {
+            return self::BALANCE_STATE_OK;
+        }
+
+        return match ($this->balance_source) {
+            self::BALANCE_SOURCE_STALE => self::BALANCE_STATE_STALE,
+            self::BALANCE_SOURCE_DEMO_SEED => self::BALANCE_STATE_DEMO_SEED,
+            default => self::BALANCE_STATE_UNKNOWN,
+        };
+    }
+
+    public function balanceIsKnown(): bool
+    {
+        return $this->balanceState() === self::BALANCE_STATE_OK;
     }
 
     public function materialType(): BelongsTo

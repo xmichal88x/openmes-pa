@@ -199,10 +199,17 @@ class MaterialAllocationService
                 if ($required <= 0) {
                     continue;
                 }
+                // A balance nobody declared is not a zero: there is no number
+                // to measure the requirement against. Published as zero it would
+                // read as "we checked the store and it is empty" — a far more
+                // confident claim than the truth, and one a planner would act on.
+                $balanceKnown = $material?->balanceIsKnown() ?? false;
                 // Keep the signed accounting balance; operators need usable stock.
-                $available = max(0, (float) ($material?->available_quantity ?? 0) - ($material ? ($consumed[$material->id] ?? 0) : 0));
+                $available = $balanceKnown
+                    ? max(0, (float) $material->available_quantity - ($consumed[$material->id] ?? 0))
+                    : null;
 
-                if ($material && $available >= $required) {
+                if ($balanceKnown && $available >= $required) {
                     $takes[$material->id] = ($takes[$material->id] ?? 0) + $required;
 
                     continue;
@@ -213,15 +220,24 @@ class MaterialAllocationService
                     'material_name' => $bomItem['material_name'] ?? $material?->name,
                     'unit_of_measure' => $bomItem['unit_of_measure'] ?? $material?->unit_of_measure,
                     'required_qty' => round($required, 4),
-                    'available_qty' => round($available, 4),
-                    'missing_qty' => round(max(0, $required - $available), 4),
+                    'available_qty' => $available === null ? null : round($available, 4),
+                    // Conservative for the planner: an unverified balance covers
+                    // nothing, so the whole requirement counts as missing.
+                    'missing_qty' => $balanceKnown ? round(max(0, $required - $available), 4) : round($required, 4),
                     'material_exists' => $material !== null,
                     // Available is on-hand minus what other batches have already
                     // reserved, so a full store can still read as zero available.
                     // Carry both halves: without them the shortage looks like the
                     // system losing stock rather than stock being spoken for.
-                    'on_hand_qty' => round((float) ($material?->stock_quantity ?? 0), 4),
+                    'on_hand_qty' => $balanceKnown ? round((float) $material->stock_quantity, 4) : null,
                     'reserved_qty' => round((float) ($material?->reserved_quantity ?? 0), 4),
+                    // Provenance travels with every line so a consumer can tell a
+                    // measured shortage from a balance nobody has vouched for.
+                    'balance_known' => $balanceKnown,
+                    'balance_state' => $material?->balanceState() ?? Material::BALANCE_STATE_UNKNOWN,
+                    'balance_source' => $material?->balance_source,
+                    'balance_owner' => $material?->stock_owner,
+                    'balance_as_of' => $material?->balance_as_of?->toIso8601String(),
                 ];
             }
 
@@ -274,7 +290,10 @@ class MaterialAllocationService
                 $material = $materialsByCode->get($bomItem['material_code']);
             }
             $requiredQty = $this->calculateRequiredQty($bomItem, $quantity);
-            $available = $material?->available_quantity ?? 0;
+            // Same rule as the planner shortage: no declared balance, no number.
+            // Sufficiency cannot be claimed from a balance nobody vouched for.
+            $balanceKnown = $material?->balanceIsKnown() ?? false;
+            $available = $balanceKnown ? (float) $material->available_quantity : null;
 
             $preview[] = [
                 'material_name' => $bomItem['material_name'] ?? $material?->name,
@@ -283,10 +302,15 @@ class MaterialAllocationService
                 'required_qty' => $requiredQty,
                 // Available = on-hand minus what is already reserved by other batches.
                 'available_qty' => $available,
-                'on_hand_qty' => (float) ($material?->stock_quantity ?? 0),
+                'on_hand_qty' => $balanceKnown ? (float) $material->stock_quantity : null,
                 'reserved_qty' => (float) ($material?->reserved_quantity ?? 0),
-                'sufficient' => $material ? $available >= $requiredQty : false,
+                'sufficient' => $balanceKnown && $available >= $requiredQty,
                 'material_exists' => $material !== null,
+                'balance_known' => $balanceKnown,
+                'balance_state' => $material?->balanceState() ?? Material::BALANCE_STATE_UNKNOWN,
+                'balance_source' => $material?->balance_source,
+                'balance_owner' => $material?->stock_owner,
+                'balance_as_of' => $material?->balance_as_of?->toIso8601String(),
                 'consumed_at' => $bomItem['consumed_at'] ?? 'start',
                 'step_number' => $bomItem['step_number'] ?? null,
                 'estimated_cost' => $material?->unit_price

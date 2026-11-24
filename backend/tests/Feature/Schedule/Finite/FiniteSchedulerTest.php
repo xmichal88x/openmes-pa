@@ -206,7 +206,11 @@ class FiniteSchedulerTest extends TestCase
     public function test_material_shortage_makes_the_order_infeasible_without_inventing_a_date(): void
     {
         $line = $this->line();
-        $material = Material::factory()->create(['stock_quantity' => 0]);
+        $material = Material::factory()->create([
+            'stock_quantity' => 0,
+            'stock_owner' => Material::STOCK_OWNER_ERP,
+            'balance_source' => Material::BALANCE_SOURCE_OPENING_DECLARED,
+        ]);
         $order = $this->order($line, [['estimated_duration_minutes' => 60]]);
         $order->update(['process_snapshot' => array_merge($order->process_snapshot, ['bom' => [[
             'material_id' => $material->id, 'material_code' => $material->code, 'quantity_per_unit' => 1, 'scrap_percentage' => 0,
@@ -227,7 +231,11 @@ class FiniteSchedulerTest extends TestCase
     public function test_stock_is_netted_across_orders_in_scheduling_order(): void
     {
         $line = $this->line();
-        $material = Material::factory()->create(['stock_quantity' => 15]);
+        $material = Material::factory()->create([
+            'stock_quantity' => 15,
+            'stock_owner' => Material::STOCK_OWNER_ERP,
+            'balance_source' => Material::BALANCE_SOURCE_OPENING_DECLARED,
+        ]);
         $bom = [['material_id' => $material->id, 'material_code' => $material->code, 'quantity_per_unit' => 1, 'scrap_percentage' => 0]];
         $first = $this->order($line, [['estimated_duration_minutes' => 60]], ['priority' => 9]);
         $second = $this->order($line, [['estimated_duration_minutes' => 60]], ['priority' => 1]);

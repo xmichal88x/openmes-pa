@@ -45,6 +45,9 @@ class MaterialAllocationServiceTest extends TestCase
             'material_type_id' => $type->id,
             'unit_of_measure' => 'pcs',
             'stock_quantity' => 1000,
+            // Declared, so the preview has a number to compare the plan against.
+            'stock_owner' => Material::STOCK_OWNER_ERP,
+            'balance_source' => Material::BALANCE_SOURCE_OPENING_DECLARED,
         ]);
 
         $productType = ProductType::factory()->create();

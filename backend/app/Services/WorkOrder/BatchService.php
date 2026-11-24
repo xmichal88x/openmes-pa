@@ -8,6 +8,7 @@ use App\Exceptions\SystemFanoutForbiddenException;
 use App\Models\AuditLog;
 use App\Models\Batch;
 use App\Models\BatchStep;
+use App\Models\Material;
 use App\Models\QualityControlTask;
 use App\Models\ScrapEntry;
 use App\Models\SerialUnit;
@@ -376,12 +377,61 @@ class BatchService
         if ($short === []) {
             return;
         }
+
+        // A balance nobody declared comes first and on its own. "Too little
+        // stock" would be a verdict about a number that does not exist, and the
+        // fix is not "order more" — it is "declare the balance" (F1-3).
+        $undeclared = array_values(array_filter(
+            $short,
+            fn (array $line): bool => ! ($line['balance_known'] ?? false),
+        ));
+
+        if ($undeclared !== []) {
+            throw new \DomainException($this->undeclaredBalanceMessage($workOrder, $undeclared));
+        }
+
         $items = collect($short)->map(fn ($line) => trim(($line['material_code'] ?? $line['material_name'] ?? '?').' ('.__('missing :qty :unit', [
             'qty' => rtrim(rtrim(number_format((float) $line['missing_qty'], 3, '.', ''), '0'), '.'),
             'unit' => $line['unit_of_measure'] ?? '',
         ]).')'))->implode(', ');
 
         throw new \DomainException(__('Production hold: stock does not cover order :order. Missing: :items.', ['order' => $workOrder->order_no, 'items' => $items]));
+    }
+
+    /**
+     * The refusal for a hold caused by undeclared balances.
+     *
+     * The first offending state leads as a machine-readable code, so a caller,
+     * a log grep or a test can key off it instead of the prose. Every material
+     * that cannot be verified is then listed with where its number stands, and
+     * the message ends with what a person has to do — declaring the balance,
+     * never starting on one that does not exist.
+     *
+     * @param  list<array<string, mixed>>  $lines  shortage lines with `balance_known === false`
+     */
+    private function undeclaredBalanceMessage(WorkOrder $workOrder, array $lines): string
+    {
+        $code = match ($lines[0]['balance_state'] ?? Material::BALANCE_STATE_UNKNOWN) {
+            Material::BALANCE_STATE_STALE => 'material_balance_stale',
+            Material::BALANCE_STATE_DEMO_SEED => 'material_balance_demo_seed',
+            default => 'material_balance_unknown',
+        };
+
+        $items = collect($lines)->map(function (array $line): string {
+            $details = array_filter([
+                'state: '.($line['balance_state'] ?? Material::BALANCE_STATE_UNKNOWN),
+                'source: '.($line['balance_source'] ?? Material::BALANCE_STATE_UNKNOWN),
+                ! empty($line['balance_owner']) ? 'owner: '.$line['balance_owner'] : null,
+                ! empty($line['balance_as_of']) ? 'as of: '.$line['balance_as_of'] : null,
+            ]);
+
+            return ($line['material_code'] ?? $line['material_name'] ?? '?').' ('.implode(', ', $details).')';
+        })->implode(', ');
+
+        return $code.': '.__(
+            'Production hold — the balance of order :order cannot be verified. Materials: :items. Declare the balance from the ERP or an opening declaration; do not start production on an unknown balance.',
+            ['order' => $workOrder->order_no, 'items' => $items],
+        );
     }
 
     /**

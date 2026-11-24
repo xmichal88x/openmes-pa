@@ -38,6 +38,10 @@ class WorkOrderMaterialShortageTest extends TestCase
             'is_manufactured' => $manufactured,
             'stock_quantity' => $stock,
             'reserved_quantity' => 0,
+            // These cases measure stock against a requirement; the balance has to
+            // be declared or the line reports an unknown balance instead (F1-3).
+            'stock_owner' => Material::STOCK_OWNER_ERP,
+            'balance_source' => Material::BALANCE_SOURCE_OPENING_DECLARED,
         ]);
     }
 
@@ -123,11 +127,12 @@ class WorkOrderMaterialShortageTest extends TestCase
         $this->assertSame(500.0, $short[0]['reserved_qty']);
     }
 
-    public function test_a_missing_material_reports_zero_stock_rather_than_omitting_it(): void
+    public function test_a_missing_material_reports_an_unknown_balance_rather_than_omitting_it(): void
     {
-        // Nothing to read the figures off, so they must still be present and zero
-        // — the screen keys its explanatory note off `reserved_qty`, and a null
-        // there would throw rather than stay quiet.
+        // Nothing to read the figures off, so the line must still say so instead
+        // of vanishing (F1-3). The balance is unknown — not zero — while
+        // `reserved_qty` stays a number: the screen keys its explanatory note off
+        // it, and a null there would throw rather than stay quiet.
         $order = $this->order([[
             'material_code' => 'GONE',
             'material_name' => 'Gone',
@@ -140,7 +145,10 @@ class WorkOrderMaterialShortageTest extends TestCase
 
         $this->assertNotNull($short);
         $this->assertFalse($short[0]['material_exists']);
-        $this->assertSame(0.0, $short[0]['on_hand_qty']);
+        $this->assertFalse($short[0]['balance_known']);
+        $this->assertSame(Material::BALANCE_STATE_UNKNOWN, $short[0]['balance_state']);
+        $this->assertNull($short[0]['available_qty']);
+        $this->assertNull($short[0]['on_hand_qty']);
         $this->assertSame(0.0, $short[0]['reserved_qty']);
     }
 

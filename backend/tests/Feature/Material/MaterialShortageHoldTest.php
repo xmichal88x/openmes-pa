@@ -40,8 +40,11 @@ class MaterialShortageHoldTest extends TestCase
     /** An order for 10 needing 2 of a part per unit, with the given stock of it, and its first step. */
     private function firstStep(float $stock): BatchStep
     {
+        // Balance declared on purpose: this test is about a shortage, not about an
+        // undeclared balance (which the hold refuses with its own code, F1-3).
         $part = Material::factory()->create(['code' => 'PART-H', 'unit_of_measure' => 'pcs', 'material_type_id' => MaterialType::factory()->create()->id,
-            'stock_quantity' => $stock, 'reserved_quantity' => 0]);
+            'stock_quantity' => $stock, 'reserved_quantity' => 0,
+            'stock_owner' => Material::STOCK_OWNER_ERP, 'balance_source' => Material::BALANCE_SOURCE_OPENING_DECLARED]);
         $order = WorkOrder::factory()->create(['planned_qty' => 10, 'status' => WorkOrder::STATUS_IN_PROGRESS, 'process_snapshot' => ['bom' => [[
             'material_id' => $part->id, 'material_code' => 'PART-H', 'material_name' => $part->name, 'unit_of_measure' => 'pcs',
             'quantity_per_unit' => 2, 'scrap_percentage' => 0, 'consumed_at' => 'during',
