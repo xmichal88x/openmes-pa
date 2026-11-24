@@ -7,6 +7,7 @@ use App\Models\ProductType;
 use App\Models\Warehouse;
 use App\Models\WarehouseStock;
 use App\Services\Erp\Concerns\ReportsImportRows;
+use App\Services\Material\MaterialSettlementPolicy;
 use App\Services\Warehouse\MaterialStockReconciler;
 
 /**
@@ -19,6 +20,12 @@ use App\Services\Warehouse\MaterialStockReconciler;
  * stock_movements ledger: allocation, MRP and shortage reports all read
  * stock_quantity, and a silent overwrite would leave them with an unexplained
  * jump and no audit trail.
+ *
+ * A balance that is still awaiting settlement by its production operation is not
+ * the ERP's to overwrite: one item, one author — the same rule the material
+ * importer already enforces. Such a row is reported and skipped whole, never
+ * half-applied, so the plant keeps the quantity the operation withdrew and the
+ * discrepancy stays visible to the person syncing.
  */
 class StockImportService
 {
@@ -66,6 +73,15 @@ class StockImportService
 
                 if (! $material) {
                     return $this->error('material_code', __("Material ':code' not found", ['code' => $materialCode]));
+                }
+
+                // The row would rewrite a balance the operation still owes:
+                // report it and leave the balance and the ledger untouched.
+                if (app(MaterialSettlementPolicy::class)->hasPendingSettlement($material)) {
+                    return $this->error('material_code', __(
+                        'Material :code is settled by its production operation; its stock cannot be overwritten while the settlement is pending.',
+                        ['code' => $material->code],
+                    ));
                 }
 
                 if (! $warehouse->acceptsMaterials()) {
