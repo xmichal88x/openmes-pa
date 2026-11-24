@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Web;
 
+use App\Exceptions\MaterialHoldImportRefusedException;
 use App\Exceptions\PalletBackflushImportRefusedException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ImportSettingsRequest;
@@ -800,7 +801,8 @@ class SettingsController extends Controller
         } catch (ScenarioException $e) {
             // A client that asked for JSON (an API call, not the admin form) gets
             // the refusal as a validation-style 422 with the key it must fix.
-            if ($e instanceof PalletBackflushImportRefusedException && $request->expectsJson()) {
+            if (($e instanceof PalletBackflushImportRefusedException || $e instanceof MaterialHoldImportRefusedException)
+                && $request->expectsJson()) {
                 return response()->json([
                     'message' => $e->getMessage(),
                     'errors' => ['settings_file' => [$e->getMessage()]],

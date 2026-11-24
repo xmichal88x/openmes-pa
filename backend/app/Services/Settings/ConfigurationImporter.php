@@ -2,6 +2,7 @@
 
 namespace App\Services\Settings;
 
+use App\Exceptions\MaterialHoldImportRefusedException;
 use App\Exceptions\MaterialSettlementOwnershipException;
 use App\Exceptions\PalletBackflushImportRefusedException;
 use App\Http\Requests\UpdateSystemSettingsRequest;
@@ -227,6 +228,12 @@ class ConfigurationImporter
             // because a file asking for it is a mistake the admin must see.
             if (strtolower($key) === PalletBackflushImportRefusedException::KEY && self::flag($value)) {
                 throw new PalletBackflushImportRefusedException;
+            }
+            // The hold is a gate opened on its own form, once the balances are
+            // declared - a file cannot know them, so a file asking for it is a
+            // step-skipping mistake the admin must see.
+            if (strtolower($key) === MaterialHoldImportRefusedException::KEY && self::flag($value)) {
+                throw new MaterialHoldImportRefusedException;
             }
             if ($key === TimezoneRegistry::SETTING_KEY) {
                 // Only a zone the settings form offers, stored the way it stores
