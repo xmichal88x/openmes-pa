@@ -25,6 +25,7 @@ import { __, formatDate, formatDateTime, formatNumber } from '../../lib/i18n';
 import { issueTypeLabel, isSuspendedCycleIssueType } from '../../lib/issueTypeLabel';
 import { readParam, writeParams } from '../../lib/urlState';
 import { serialStatusBadge, serialStatusLabel } from '../../lib/serialStatus';
+import { balanceStateOf } from '../../lib/materialBalance';
 import { historyTitle } from '../admin/traceability/results';
 
 // Geist White restyle: light-only v1 — former `dark:` variants removed.
@@ -2424,6 +2425,11 @@ export default function WorkOrderDetail() {
     const dueDateStr = workOrder.due_date;
     const dueDatePast = dueDateStr && new Date(dueDateStr) < new Date() && workOrder.status !== 'DONE';
 
+    // A shortage line is not always "too little": it can also be "no number to
+    // compare against", i.e. a balance nobody has vouched for. The heading only
+    // claims a shortfall when every line actually measures one.
+    const balanceUnverified = materialShortages.some((m) => balanceStateOf(m) !== null);
+
     return (
         <>
             <Head title={`Work Order ${workOrder.order_no}`} />
@@ -2468,28 +2474,48 @@ export default function WorkOrderDetail() {
                 {materialShortages.length > 0 && (
                     <div className="mb-6 rounded-om border border-om-blocked bg-om-blocked-bg px-4 py-3">
                         <p className="font-medium text-om-blocked text-[13px]">
-                            {__('Not enough material to complete this order')}
+                            {balanceUnverified
+                                ? __('Material balance cannot be verified')
+                                : __('Not enough material to complete this order')}
                         </p>
                         <ul className="mt-2 space-y-1">
-                            {materialShortages.map((m, i) => (
-                                <li key={i} className="font-mono text-[12px] text-om-blocked">
-                                    {m.material_code || m.material_name}
-                                    {m.material_exists
-                                        ? ` · ${__('need')} ${fmtQty(m.required_qty)} · ${__('have')} ${fmtQty(m.available_qty)} · ${__('missing')} ${fmtQty(m.missing_qty)} ${m.unit_of_measure || ''}`
-                                        : ` · ${__('not in stock list')}`}
-                                    {/*
-                                        "have 0" next to a full store reads as a fault in the
-                                        system. It is not: the stock is reserved by other
-                                        batches. Say so, but only when there is a reservation
-                                        to explain — otherwise this is noise on every line.
-                                    */}
-                                    {m.material_exists && m.reserved_qty > 0 && (
-                                        <span className="text-om-muted">
-                                            {` (${__('on hand')} ${fmtQty(m.on_hand_qty)} · ${__('reserved by other batches')} ${fmtQty(m.reserved_qty)})`}
-                                        </span>
-                                    )}
-                                </li>
-                            ))}
+                            {materialShortages.map((m, i) => {
+                                const balance = balanceStateOf(m);
+
+                                // An undeclared balance has no number to compare the
+                                // requirement against. "have 0 / missing X" would read as
+                                // a measured shortage, and a bare dash as an empty store;
+                                // name the state and the provenance instead, and print
+                                // only the requirement, which is the one real value.
+                                if (balance && m.material_exists) {
+                                    return (
+                                        <li key={i} className="font-mono text-[12px] text-om-blocked">
+                                            {m.material_code || m.material_name}
+                                            {` · ${__('balance unknown')} (${balance.state}${balance.source ? ` · ${balance.source}` : ''}${balance.asOf ? ` · ${balance.asOf}` : ''}) · ${__('need')} ${fmtQty(m.required_qty)} ${m.unit_of_measure || ''}`}
+                                        </li>
+                                    );
+                                }
+
+                                return (
+                                    <li key={i} className="font-mono text-[12px] text-om-blocked">
+                                        {m.material_code || m.material_name}
+                                        {m.material_exists
+                                            ? ` · ${__('need')} ${fmtQty(m.required_qty)} · ${__('have')} ${fmtQty(m.available_qty)} · ${__('missing')} ${fmtQty(m.missing_qty)} ${m.unit_of_measure || ''}`
+                                            : ` · ${__('not in stock list')}`}
+                                        {/*
+                                            "have 0" next to a full store reads as a fault in the
+                                            system. It is not: the stock is reserved by other
+                                            batches. Say so, but only when there is a reservation
+                                            to explain — otherwise this is noise on every line.
+                                        */}
+                                        {m.material_exists && m.reserved_qty > 0 && (
+                                            <span className="text-om-muted">
+                                                {` (${__('on hand')} ${fmtQty(m.on_hand_qty)} · ${__('reserved by other batches')} ${fmtQty(m.reserved_qty)})`}
+                                            </span>
+                                        )}
+                                    </li>
+                                );
+                            })}
                         </ul>
                     </div>
                 )}

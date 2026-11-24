@@ -3,6 +3,7 @@
 import Tooltip from '../../../../components/Tooltip';
 import DueCountdown from '../../../../components/DueCountdown';
 import { __ } from '../../../../lib/i18n';
+import { balanceStateOf } from '../../../../lib/materialBalance';
 import { TIER_BADGE_STYLES, tierLabel } from '../../customers/fields';
 import { statusOf, statusLabel, priorityMeta, fmtQty, shiftColor, MONO } from './helpers';
 
@@ -72,6 +73,10 @@ function shortageTitle(wo) {
     const parts = missing.map((m) => {
         const code = m.material_code || m.material_name || '?';
         if (!m.material_exists) return `${code} — ${__('not in stock list')}`;
+        // No declared balance: there is nothing to subtract, and "−0" or a
+        // whole requirement printed as missing would read as a measured number.
+        // Mark the line and name the reason in the tooltip instead.
+        if (balanceStateOf(m)) return `${code} ? ${__('balance unknown')}`;
         return `${code} −${fmtQty(m.missing_qty)} ${m.unit_of_measure || ''}`.trim();
     });
     return `${__('Not enough material')}: ${parts.join(', ')}`;
