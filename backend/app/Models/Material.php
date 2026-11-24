@@ -18,6 +18,38 @@ class Material extends Model
     use HasCustomFields, HasFactory, HasTenant;
     use SoftDeletesWithAudit;
 
+    /** Which system's balance for this SKU is authoritative (F1-1). */
+    public const STOCK_OWNER_ERP = 'erp';
+
+    public const STOCK_OWNER_MES = 'mes';
+
+    public const STOCK_OWNER_UNKNOWN = 'unknown';
+
+    /** Where the declared balance number came from. */
+    public const BALANCE_SOURCE_ERP_PROJECTION = 'erp_projection';
+
+    public const BALANCE_SOURCE_OPENING_DECLARED = 'opening_declared';
+
+    public const BALANCE_SOURCE_MES_LEDGER = 'mes_ledger';
+
+    public const BALANCE_SOURCE_DEMO_SEED = 'demo_seed';
+
+    public const BALANCE_SOURCE_UNKNOWN = 'unknown';
+
+    public const BALANCE_SOURCE_STALE = 'stale';
+
+    /** Sources that make a balance usable when the ERP owns the SKU. */
+    public const ERP_DECLARED_BALANCE_SOURCES = [
+        self::BALANCE_SOURCE_ERP_PROJECTION,
+        self::BALANCE_SOURCE_OPENING_DECLARED,
+    ];
+
+    /** Sources that make a balance usable when the MES owns the SKU (WIP). */
+    public const MES_DECLARED_BALANCE_SOURCES = [
+        self::BALANCE_SOURCE_MES_LEDGER,
+        self::BALANCE_SOURCE_OPENING_DECLARED,
+    ];
+
     protected $fillable = [
         'code',
         'name',
@@ -40,6 +72,9 @@ class Material extends Model
         'price_currency',
         'ean',
         'last_stock_sync_at',
+        'stock_owner',
+        'balance_source',
+        'balance_as_of',
         'is_active',
         'tenant_id',
     ];
@@ -51,6 +86,11 @@ class Material extends Model
      */
     protected $attributes = [
         'is_manufactured' => false,
+        // Nothing is known about the balance until someone declares it. A null
+        // here would read as "not set" rather than "unknown", which is a
+        // different and more dangerous statement.
+        'stock_owner' => self::STOCK_OWNER_UNKNOWN,
+        'balance_source' => self::BALANCE_SOURCE_UNKNOWN,
     ];
 
     protected function casts(): array
@@ -64,6 +104,7 @@ class Material extends Model
             'min_stock_level' => 'decimal:3',
             'unit_price' => 'decimal:4',
             'last_stock_sync_at' => 'datetime',
+            'balance_as_of' => 'datetime',
             'extra_data' => 'array',
         ];
     }
@@ -75,6 +116,36 @@ class Material extends Model
     public function getAvailableQuantityAttribute(): float
     {
         return (float) $this->stock_quantity - (float) $this->reserved_quantity;
+    }
+
+    /** The ERP's number is the authoritative one for this SKU. */
+    public function isErpOwned(): bool
+    {
+        return $this->stock_owner === self::STOCK_OWNER_ERP;
+    }
+
+    /** The MES ledger is the authoritative one for this SKU (work in progress). */
+    public function isMesOwned(): bool
+    {
+        return $this->stock_owner === self::STOCK_OWNER_MES;
+    }
+
+    /**
+     * The balance is a real, attributed number. It depends on who owns the SKU:
+     * a `mes_ledger` number means nothing for an ERP-owned raw material, and an
+     * `erp_projection` means nothing for WIP. Demo seeds and stale reads are
+     * excluded on purpose — treating them as truth is the silent fallback this
+     * column set exists to prevent. Unrecognised owners are not declared.
+     */
+    public function hasDeclaredBalance(): bool
+    {
+        $sources = match ($this->stock_owner) {
+            self::STOCK_OWNER_ERP => self::ERP_DECLARED_BALANCE_SOURCES,
+            self::STOCK_OWNER_MES => self::MES_DECLARED_BALANCE_SOURCES,
+            default => [],
+        };
+
+        return in_array($this->balance_source, $sources, true);
     }
 
     public function materialType(): BelongsTo
@@ -204,5 +275,25 @@ class Material extends Model
         }
 
         return $query;
+    }
+
+    /**
+     * Rows with no usable declared balance: ownership unknown, or a source that
+     * does not count for that owner. Grouped so a `where` appended afterwards
+     * still applies to the whole condition instead of only the last branch.
+     */
+    public function scopeWithUndeclaredBalance(Builder $query): Builder
+    {
+        return $query->where(function (Builder $query): void {
+            $query->where('stock_owner', self::STOCK_OWNER_UNKNOWN)
+                ->orWhere(function (Builder $query): void {
+                    $query->where('stock_owner', self::STOCK_OWNER_ERP)
+                        ->whereNotIn('balance_source', self::ERP_DECLARED_BALANCE_SOURCES);
+                })
+                ->orWhere(function (Builder $query): void {
+                    $query->where('stock_owner', self::STOCK_OWNER_MES)
+                        ->whereNotIn('balance_source', self::MES_DECLARED_BALANCE_SOURCES);
+                });
+        });
     }
 }
