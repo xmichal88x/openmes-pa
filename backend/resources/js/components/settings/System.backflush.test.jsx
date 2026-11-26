@@ -1,7 +1,10 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import PalletBackflushSetting from './PalletBackflushSetting';
+
+// Outside Pages/ on purpose: the page glob in app.jsx would otherwise bundle
+// this file (and vitest with it) into the app. lib/pageGlob.test.js guards it.
+import PalletBackflushSetting from '../../Pages/settings/PalletBackflushSetting';
 
 const render = (props) => renderToStaticMarkup(createElement(PalletBackflushSetting, props));
 

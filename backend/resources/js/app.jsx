@@ -12,8 +12,16 @@ import './lib/echo'; // opens the single Reverb WebSocket
 // time; a glob that matches nothing yields {}, so a build with no modules
 // installed simply has an empty second map. The lookup itself lives in
 // lib/pageResolver.js, where it can be tested.
-const corePages = import.meta.glob('./Pages/**/*.jsx', { eager: true });
-const modulePages = import.meta.glob('../../modules/*/resources/js/Pages/**/*.jsx', { eager: true });
+//
+// Tests are excluded explicitly: a *.test.jsx sitting under Pages/ was bundled
+// into the app (dragging vitest's imports with it), which left the built app
+// blank because a test module has no page component to resolve. Pages are not
+// where tests belong anyway -- lib/pageGlob.test.js keeps it that way.
+const corePages = import.meta.glob(['./Pages/**/*.jsx', '!./Pages/**/*.test.jsx'], { eager: true });
+const modulePages = import.meta.glob(
+    ['../../modules/*/resources/js/Pages/**/*.jsx', '!../../modules/*/resources/js/Pages/**/*.test.jsx'],
+    { eager: true },
+);
 
 /**
  * Start fetching the frontends of modules installed after this build, at import
